@@ -1,0 +1,16 @@
+{
+  "name": "signal-intel-v3",
+  "version": "1.0.0",
+  "description": "Signal Intel v3 — Praxis Experiential Social Intelligence Platform",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "next": "14.2.5",
+    "react": "^18",
+    "react-dom": "^18"
+  }
+}
