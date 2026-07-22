@@ -331,7 +331,7 @@ const DEMO_SOCIAL_LISTENING = {
     { source: 'reddit.com', title: 'EastWest Bank makes InstaPay and PESONet transfers free starting July 15', meta: '09 Jul, 2026', sentiment: 'Positive', text: 'EastWest Bank became the latest bank to offer free InstaPay and PESONet fund transfers, giving customers one more way to save on everyday banking.', icon: 'RD', color: '#ff4500' },
     { source: 'instagram.com', title: 'eastwestbanker', meta: '724 followers · 14 Jul, 2026', sentiment: 'Positive', text: 'Dream Run 2026 content carried upbeat reactions around the CDO leg, registration pushes, and community participation.', icon: 'IG', color: '#e1306c' },
     { source: 'musictech.com', title: 'EastWest Sounds DrumX Plugin', meta: '21 Jul, 2026', sentiment: 'Neutral', text: 'Music and creator mentions used the EastWest name in a separate entertainment/software context, contributing neutral search noise.', icon: 'MT', color: '#00d2ff' },
-    { source: 'facebook.com', title: 'EastWest Bank', meta: '825K followers · 14 Jul, 2026', sentiment: 'Positive', text: 'Facebook amplified Dream Run 2026 registration and event reminders with strong reach from the owned audience base.', icon: 'FB', color: '#1877f2' },
+    { source: 'youtube.com', title: 'EastWest Horizons', meta: '3.0M views · 5,010 followers · 28 Jun, 2026', sentiment: 'Neutral', text: 'Open a regular savings or checking account for up to Php 100,000 in rewards with EastWest Horizons. This YouTube video was the main June 28 reach driver.', icon: 'YT', color: '#ff0000' },
     { source: 'ph.jobstreet.com', title: 'Bayani Esteban Jr, Loan Specialist at EastWest Rural Bank, Inc.', meta: '21 Jul, 2026', sentiment: 'Neutral', text: 'Hiring and professional profile pages added recurring non-social mentions around EastWest banking roles.', icon: 'JS', color: '#0b3d91' },
     { source: 'x.com', title: 'FretlessMonster', meta: '920 views · 18K followers · 20 Jul, 2026', sentiment: 'Positive', text: 'Entertainment conversation referenced EastWest Studios and musician activity, helping explain positive but non-bank-related lift.', icon: 'X', color: '#9ca3af' },
   ],
@@ -370,15 +370,28 @@ const EASTWEST_DEMO_METRICS = {
 const EASTWEST_DEMO_SPIKES = [
   'June 25: 197 mentions and 1.46M reach, driven by the Garmin Pay launch.',
   'July 9: 153 mentions and 2.33M reach, driven by the InstaPay/PESONet fee waiver.',
-  'June 28: only 58 mentions but 3.38M reach, indicating one massive viral article with disproportionate reach.',
+  'June 28: only 58 mentions but 3.38M reach, driven by the EastWest Horizons YouTube video promoting up to Php 100,000 in rewards for opening a regular savings or checking account.',
   'July trend: conversation gradually increased from roughly 50-60 mentions per day to 90-100 mentions per day.',
 ];
 
 const EASTWEST_DEMO_EVENTS = [
   { date: 'June 25, 2026', description: 'Garmin Pay launch created the largest mention spike, with 197 mentions and 1.46M reach.' },
-  { date: 'June 28, 2026', description: 'A single viral article produced 3.38M reach despite only 58 mentions.' },
+  { date: 'June 28, 2026', description: 'EastWest Horizons YouTube video generated 3.0M views and drove 3.38M reach despite only 58 mentions.' },
   { date: 'July 9, 2026', description: 'InstaPay/PESONet fee waiver announcement drove 153 mentions and 2.33M reach.' },
 ];
+
+const EASTWEST_JUNE28_CONTEXT = `
+June 28, 2026 daily report:
+- Total mentions: 58 (+12%).
+- Total reach: 3.4M (+515%), mostly social reach at 3.2M.
+- The disproportionate reach spike was driven by a YouTube video from EastWest Horizons.
+- EastWest Horizons mention details: YouTube, 3.0M views, 5,010 followers, June 28, 2026.
+- Video message: open a regular savings or checking account for up to Php 100,000 in rewards with EastWest Horizons.
+- Sentiment on June 28 was mostly neutral: 85.2% neutral, 13.1% positive, 1.6% negative.
+- Positive mentions: 5. Negative mentions: 1.
+- Source mix on June 28: Facebook 29.5%, News 19.7%, Other Socials 14.8%, Instagram 13.1%, TikTok 11.5%, Videos 8.2%, Blogs 1.6%, X/Twitter 1.6%.
+- Other notable June 28 mentions included Garmin Pay coverage from Benteuno, EastWest Bank hiring content, an App Store listing, a Tribune item on the 11th Batangas branch, and a Reddit credit-card charge complaint.
+`;
 
 const pct = (count, total) => parseFloat(((count / Math.max(total, 1)) * 100).toFixed(1));
 
@@ -635,7 +648,7 @@ function FloatingAskAI({ onClick }) {
   );
 }
 
-function composeReportContext({ brand, period, metrics, context, analysis, competitive, report }) {
+function composeReportContext({ brand, period, metrics, context, analysis, competitive, report, demoContext }) {
   return `
 Brand: ${brand}
 Period: ${period}
@@ -650,6 +663,7 @@ Brand24 events: ${context?.events?.map(e => `${e.date}: ${e.description}`).join(
 Grok signals: ${context?.grokSignals?.substring(0, 1200) || 'n/a'}
 Share of voice: ${competitive?.sovData?.map(s => `${s.brand}: ${s.found ? `${s.percentage}% (${s.mentions})` : 'no project'}`).join(' | ') || 'n/a'}
 Recommendations: ${report?.recommendations?.join(' | ') || 'n/a'}
+Known demo context: ${demoContext || 'n/a'}
 `;
 }
 
@@ -724,7 +738,7 @@ export default function SignalIntel() {
   const useEastWestDemo = DEMO_MODE && !hasB24 && brand.toLowerCase().includes('eastwest');
   const displayMetrics = useEastWestDemo ? EASTWEST_DEMO_METRICS : metrics;
   const displaySummary = useEastWestDemo
-    ? `${brand} recorded approximately 2,281 mentions from June 22 to July 22, 2026, averaging about 74 mentions per day. Conversation was shaped by two major spikes: the June 25 Garmin Pay launch and the July 9 InstaPay/PESONet fee waiver announcement. Reach also over-indexed on June 28, when a single viral article generated 3.38M reach despite only 58 mentions.`
+    ? `${brand} recorded approximately 2,281 mentions from June 22 to July 22, 2026, averaging about 74 mentions per day. Conversation was shaped by the June 25 Garmin Pay launch, the July 9 InstaPay/PESONet fee waiver announcement, and a June 28 reach spike from EastWest Horizons on YouTube. On June 28, only 58 mentions generated 3.4M reach because the EastWest Horizons video drew about 3.0M views while promoting up to Php 100,000 in rewards for opening a savings or checking account.`
     : analysis?.executiveSummary;
   const displaySpikeDrivers = useEastWestDemo ? EASTWEST_DEMO_SPIKES : analysis?.spikeDrivers;
   const displayEvents = context?.events?.length ? context.events : (useEastWestDemo ? EASTWEST_DEMO_EVENTS : []);
@@ -737,7 +751,8 @@ export default function SignalIntel() {
     spikeDrivers: displaySpikeDrivers,
     sentimentNarrative: displaySentimentNarrative,
   };
-  const reportContext = composeReportContext({ brand, period, metrics: displayMetrics, context, analysis: displayAnalysis, competitive, report });
+  const demoContext = useEastWestDemo ? EASTWEST_JUNE28_CONTEXT : '';
+  const reportContext = composeReportContext({ brand, period, metrics: displayMetrics, context, analysis: displayAnalysis, competitive, report, demoContext });
 
   const askAI = async e => {
     e.preventDefault();
@@ -779,6 +794,7 @@ Answer concisely with specific numbers, drivers, and next actions when useful.`,
     try {
       const result = await grokIntel(
         `Find the top 5 real public posts or web mentions about "${brand}" in the Philippines during ${period} with ${sentiment.toLowerCase()} sentiment.
+${demoContext ? `Known demo context to use when relevant: ${demoContext}` : ''}
 For each result include source/platform, date if available, author or outlet if available, a short paraphrase, URL if available, and why it matches ${sentiment.toLowerCase()} sentiment.
 Start with a one-paragraph summary. Label uncertain matches.`,
         `Clickable Sentiment: ${sentiment}`
@@ -803,6 +819,7 @@ Start with a one-paragraph summary. Label uncertain matches.`,
       const result = await grokIntel(
         `Search live X/Twitter and the web for "${brand}" in the Philippines during ${period}.
 Topic query: "${query.trim()}"
+${demoContext ? `Known demo context to use when relevant: ${demoContext}` : ''}
 Return a concise intelligence summary, recurring themes, specific public posts or articles with URLs when available, sentiment read, and recommended brand action.`,
         'Grok Query'
       );
