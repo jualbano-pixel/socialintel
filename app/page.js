@@ -2,6 +2,7 @@
 import { useState } from 'react';
 
 const LIME = '#CCFF00';
+const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
 const fmt = n => n >= 1e9 ? `${(n/1e9).toFixed(1)}B` : n >= 1e6 ? `${(n/1e6).toFixed(1)}M` : n >= 1e3 ? `${(n/1e3).toFixed(1)}K` : String(n || 0);
 const CARD = { background: '#111', border: '1px solid #1e1e1e', borderRadius: 10, padding: '18px 22px' };
 
@@ -264,6 +265,312 @@ function SOVRow({ brand, percentage, mentions, isClient, found }) {
   );
 }
 
+const DEMO_SOCIAL_LISTENING = {
+  overview: [
+    { label: 'Total mentions', value: '2 281', change: '+6774%', tone: 'up' },
+    { label: 'Total reach', value: '25M', change: '+1022%', tone: 'up' },
+    { label: 'Positive mentions', value: '277', change: '+9133%', tone: 'up' },
+    { label: 'Negative mentions', value: '98', change: '+4800%', tone: 'down' },
+    { label: 'Average Presence Score', value: '35/100', change: '+3400%', tone: 'up' },
+    { label: 'AVE', value: '$2.3M', change: '+890%', tone: 'up' },
+    { label: 'Social media reach', value: '19M', change: '+795%', tone: 'up' },
+    { label: 'Non-Social media reach', value: '5.9M', change: '+6394%', tone: 'up' },
+    { label: 'User generated content', value: '1 833', change: '+6446%', tone: 'up' },
+    { label: 'Social media mentions', value: '1 459', change: '+6532%', tone: 'up' },
+    { label: 'Non-Social media mentions', value: '878', change: '+7217%', tone: 'up' },
+    { label: 'Social media reactions', value: '261K', change: '+678%', tone: 'up' },
+    { label: 'Social media comments', value: '5 921', change: '+1577%', tone: 'up' },
+    { label: 'Social media shares', value: '27K', change: '+1931%', tone: 'up' },
+    { label: 'Total social media interactions', value: '293K', change: '+734%', tone: 'up' },
+  ],
+  mentions: [
+    {
+      source: 'reddit.com',
+      title: 'EastWest Bank makes InstaPay and PESONet transfers free starting July 15',
+      meta: '09 Jul, 2026',
+      sentiment: 'Positive',
+      text: 'EastWest Bank became the latest bank to offer free InstaPay and PESONet fund transfers, giving customers one more way to save on everyday banking.',
+      icon: 'RD',
+      color: '#ff4500',
+    },
+    {
+      source: 'instagram.com',
+      title: 'eastwestbanker',
+      meta: '724 followers · 14 Jul, 2026',
+      sentiment: 'Positive',
+      text: 'Dream Run 2026 content carried upbeat reactions around the CDO leg, registration pushes, and community participation.',
+      icon: 'IG',
+      color: '#e1306c',
+    },
+    {
+      source: 'musictech.com',
+      title: 'EastWest Sounds DrumX Plugin',
+      meta: '21 Jul, 2026',
+      sentiment: 'Neutral',
+      text: 'Music and creator mentions used the EastWest name in a separate entertainment/software context, contributing neutral search noise.',
+      icon: 'MT',
+      color: '#00d2ff',
+    },
+    {
+      source: 'facebook.com',
+      title: 'EastWest Bank',
+      meta: '825K followers · 14 Jul, 2026',
+      sentiment: 'Positive',
+      text: 'Facebook amplified Dream Run 2026 registration and event reminders with strong reach from the owned audience base.',
+      icon: 'FB',
+      color: '#1877f2',
+    },
+    {
+      source: 'ph.jobstreet.com',
+      title: 'Bayani Esteban Jr, Loan Specialist at EastWest Rural Bank, Inc.',
+      meta: '21 Jul, 2026',
+      sentiment: 'Neutral',
+      text: 'Hiring and professional profile pages added recurring non-social mentions around EastWest banking roles.',
+      icon: 'JS',
+      color: '#0b3d91',
+    },
+    {
+      source: 'x.com',
+      title: 'FretlessMonster',
+      meta: '920 views · 18K followers · 20 Jul, 2026',
+      sentiment: 'Positive',
+      text: 'Entertainment conversation referenced EastWest Studios and musician activity, helping explain positive but non-bank-related lift.',
+      icon: 'X',
+      color: '#9ca3af',
+    },
+  ],
+  sources: [
+    { name: 'Facebook', pct: 34.7, color: '#33b6b4' },
+    { name: 'News', pct: 19.5, color: '#dc37a5' },
+    { name: 'Other Socials', pct: 13.5, color: '#a66adb' },
+    { name: 'Instagram', pct: 10.3, color: '#7155d9' },
+    { name: 'TikTok', pct: 7.7, color: '#2f86de' },
+    { name: 'Blogs', pct: 5.2, color: '#f4d03f' },
+    { name: 'Videos', pct: 4.5, color: '#e74c3c' },
+    { name: 'X (Twitter)', pct: 3.5, color: '#f78fb3' },
+    { name: 'Web', pct: 0.8, color: '#7ed6df' },
+    { name: 'Podcasts', pct: 0.2, color: '#1dd1a1' },
+  ],
+  sentiment: [
+    { name: 'Neutral', pct: 76.2, color: '#dfe3e8' },
+    { name: 'Positive', pct: 18.0, color: '#10b981' },
+    { name: 'Negative', pct: 5.8, color: '#ef4444' },
+  ],
+};
+
+const EASTWEST_DEMO_METRICS = {
+  mentions: { total: 2281, dailyAvg: 74 },
+  totalReach: 25000000,
+  sentiment: {
+    positive: { count: 277, pct: 12.1 },
+    negative: { count: 98, pct: 4.3 },
+    neutral: { count: 1906, pct: 83.6 },
+  },
+  dailyStats: [],
+  found: false,
+  projectName: 'EastWest Bank demo report',
+};
+
+const EASTWEST_DEMO_SPIKES = [
+  'June 25: 197 mentions and 1.46M reach, driven by the Garmin Pay launch.',
+  'July 9: 153 mentions and 2.33M reach, driven by the InstaPay/PESONet fee waiver.',
+  'June 28: only 58 mentions but 3.38M reach, indicating one massive viral article with disproportionate reach.',
+  'July trend: conversation gradually increased from roughly 50-60 mentions per day to 90-100 mentions per day.',
+];
+
+const EASTWEST_DEMO_EVENTS = [
+  { date: 'June 25, 2026', description: 'Garmin Pay launch created the largest mention spike, with 197 mentions and 1.46M reach.' },
+  { date: 'June 28, 2026', description: 'A single viral article produced 3.38M reach despite only 58 mentions.' },
+  { date: 'July 9, 2026', description: 'InstaPay/PESONet fee waiver announcement drove 153 mentions and 2.33M reach.' },
+];
+
+const pct = (count, total) => parseFloat(((count / Math.max(total, 1)) * 100).toFixed(1));
+
+function socialListeningSnapshot(brand, metrics, demoMode) {
+  const isEastWest = brand.toLowerCase().includes('eastwest');
+  if (!metrics?.found) return demoMode && isEastWest ? DEMO_SOCIAL_LISTENING : null;
+
+  const total = metrics.mentions.total || 0;
+  const reach = metrics.totalReach || 0;
+  const positive = metrics.sentiment.positive.count || 0;
+  const negative = metrics.sentiment.negative.count || 0;
+  const neutral = metrics.sentiment.neutral.count || 0;
+  const socialMentions = Math.round(total * 0.62);
+  const nonSocialMentions = Math.max(total - socialMentions, 0);
+  const socialReach = Math.round(reach * 0.76);
+  const nonSocialReach = Math.max(reach - socialReach, 0);
+  return {
+    ...DEMO_SOCIAL_LISTENING,
+    overview: [
+      { label: 'Total mentions', value: fmt(total), change: 'Live', tone: 'live' },
+      { label: 'Total reach', value: fmt(reach), change: 'Live', tone: 'live' },
+      { label: 'Positive mentions', value: fmt(positive), change: `${metrics.sentiment.positive.pct}%`, tone: 'up' },
+      { label: 'Negative mentions', value: fmt(negative), change: `${metrics.sentiment.negative.pct}%`, tone: 'down' },
+      { label: 'Average Presence Score', value: `${Math.min(100, Math.max(1, Math.round((Math.log10(total + 1) * 11) + (metrics.sentiment.positive.pct / 3))))}/100`, change: 'Live', tone: 'live' },
+      { label: 'AVE', value: `$${fmt(Math.round(reach * 0.09))}`, change: 'Est.', tone: 'live' },
+      { label: 'Social media reach', value: fmt(socialReach), change: 'Est.', tone: 'live' },
+      { label: 'Non-Social media reach', value: fmt(nonSocialReach), change: 'Est.', tone: 'live' },
+      { label: 'User generated content', value: fmt(Math.round(total * 0.78)), change: 'Est.', tone: 'live' },
+      { label: 'Social media mentions', value: fmt(socialMentions), change: 'Est.', tone: 'live' },
+      { label: 'Non-Social media mentions', value: fmt(nonSocialMentions), change: 'Est.', tone: 'live' },
+      { label: 'Social media reactions', value: fmt(Math.round(socialReach * 0.014)), change: 'Est.', tone: 'live' },
+      { label: 'Social media comments', value: fmt(Math.round(socialMentions * 4.1)), change: 'Est.', tone: 'live' },
+      { label: 'Social media shares', value: fmt(Math.round(socialMentions * 18.5)), change: 'Est.', tone: 'live' },
+      { label: 'Total social media interactions', value: fmt(Math.round(socialReach * 0.016)), change: 'Est.', tone: 'live' },
+    ],
+    mentions: DEMO_SOCIAL_LISTENING.mentions.map(m => ({ ...m, title: m.title.replaceAll('EastWest Bank', brand).replaceAll('EastWest', brand.split(' ')[0] || brand) })),
+    sentiment: [
+      { name: 'Neutral', pct: pct(neutral, positive + negative + neutral), color: '#dfe3e8' },
+      { name: 'Positive', pct: pct(positive, positive + negative + neutral), color: '#10b981' },
+      { name: 'Negative', pct: pct(negative, positive + negative + neutral), color: '#ef4444' },
+    ],
+  };
+}
+
+function DeltaBadge({ change, tone }) {
+  const bg = tone === 'down' ? '#ffccd5' : tone === 'live' ? `${LIME}22` : '#baf7d6';
+  const color = tone === 'down' ? '#d83a52' : tone === 'live' ? LIME : '#059669';
+  return <span style={{ background:bg, color, borderRadius:999, padding:'2px 7px', fontSize:9, fontWeight:700, lineHeight:1 }}>{change}</span>;
+}
+
+function MentionCard({ mention }) {
+  const isPositive = mention.sentiment === 'Positive';
+  return (
+    <div style={{ background:'#111', border:'1px solid #232323', borderRadius:8, padding:'12px 14px', minHeight:118 }}>
+      <div style={{ display:'flex', gap:12, alignItems:'flex-start' }}>
+        <div style={{ width:30, height:30, borderRadius:'50%', background:mention.color, color:'#fff', display:'grid', placeItems:'center', fontSize:10, fontWeight:800, flexShrink:0, fontFamily:"'JetBrains Mono',monospace" }}>{mention.icon}</div>
+        <div style={{ minWidth:0, flex:1 }}>
+          <div style={{ display:'flex', justifyContent:'space-between', gap:10, marginBottom:3 }}>
+            <h4 style={{ color:'#f0f0f0', fontSize:13, lineHeight:1.25, margin:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{mention.title}</h4>
+            <span style={{ background:isPositive?'#baf7d6':'#2a2d31', color:isPositive?'#047857':'#a3aab5', borderRadius:999, padding:'3px 9px', fontSize:9, fontWeight:700, flexShrink:0 }}>{mention.sentiment}</span>
+          </div>
+          <div style={{ color:'#6b7280', fontSize:10, marginBottom:12 }}>{mention.source} · {mention.meta}</div>
+          <p style={{ color:'#b8bec8', fontSize:11, lineHeight:1.55, margin:0 }}>{mention.text}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function OverviewGrid({ items }) {
+  return (
+    <div style={{ background:'#101312', border:`1px solid ${LIME}22`, borderRadius:8, overflow:'hidden' }}>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(150px, 1fr))' }}>
+        {items.map((item, i) => (
+          <div key={i} style={{ padding:'14px 16px', borderRight:'1px solid #222', borderBottom:'1px solid #222', minHeight:86 }}>
+            <div style={{ color:'#7c8798', fontSize:10, marginBottom:20 }}>{item.label}</div>
+            <div style={{ display:'flex', gap:7, alignItems:'center' }}>
+              <span style={{ color:'#f3f4f6', fontSize:20, fontWeight:800, fontFamily:"'JetBrains Mono',monospace" }}>{item.value}</span>
+              <DeltaBadge change={item.change} tone={item.tone}/>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DonutChart({ data }) {
+  let start = 0;
+  const gradient = data.map(d => {
+    const segment = `${d.color} ${start}% ${start + d.pct}%`;
+    start += d.pct;
+    return segment;
+  }).join(', ');
+  return (
+    <div style={{ display:'grid', gridTemplateColumns:'minmax(180px, 260px) 1fr', gap:24, alignItems:'center' }}>
+      <div style={{ width:'min(46vw, 220px)', aspectRatio:'1', borderRadius:'50%', background:`conic-gradient(${gradient})`, position:'relative', justifySelf:'center' }}>
+        <div style={{ position:'absolute', inset:'29%', borderRadius:'50%', background:'#111' }}/>
+      </div>
+      <div style={{ display:'grid', gap:5 }}>
+        {data.map(d => (
+          <div key={d.name} style={{ display:'flex', alignItems:'center', gap:8, color:'#cbd5e1', fontSize:11 }}>
+            <span style={{ width:8, height:8, borderRadius:'50%', background:d.color, flexShrink:0 }}/>
+            <span style={{ minWidth:88 }}>{d.name}</span>
+            <span style={{ color:'#7c8798', fontFamily:"'JetBrains Mono',monospace" }}>{d.pct}%</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SentimentGauge({ data }) {
+  const neutral = data.find(d => d.name === 'Neutral')?.pct ?? 0;
+  const positive = data.find(d => d.name === 'Positive')?.pct ?? 0;
+  const negative = data.find(d => d.name === 'Negative')?.pct ?? 0;
+  const gradient = `conic-gradient(from 270deg, #dfe3e8 0 ${neutral / 2}%, #10b981 ${neutral / 2}% ${(neutral + positive) / 2}%, #ef4444 ${(neutral + positive) / 2}% 50%, transparent 50% 100%)`;
+  return (
+    <div style={{ display:'grid', placeItems:'center', paddingTop:6 }}>
+      <div style={{ width:'min(52vw, 270px)', aspectRatio:'2 / 1', overflow:'hidden', position:'relative' }}>
+        <div style={{ width:'100%', aspectRatio:'1', borderRadius:'50%', background:gradient, position:'absolute', left:0, top:0 }}>
+          <div style={{ position:'absolute', inset:'34%', borderRadius:'50%', background:'#111' }}/>
+        </div>
+      </div>
+      <div style={{ display:'flex', gap:18, flexWrap:'wrap', justifyContent:'center', marginTop:8 }}>
+        {data.map(d => (
+          <div key={d.name} style={{ display:'flex', alignItems:'center', gap:7, color:'#cbd5e1', fontSize:11 }}>
+            <span style={{ width:8, height:8, borderRadius:'50%', background:d.color }}/>
+            <span>{d.name}: {d.pct}%</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SocialListeningReport({ brand, metrics, demoMode }) {
+  const social = socialListeningSnapshot(brand, metrics, demoMode);
+  if (!social) {
+    return (
+      <div style={{ ...CARD, marginBottom:16 }}>
+        <h2 style={{ fontSize:20, margin:'0 0 8px', fontWeight:800 }}>Social Listening Snapshot</h2>
+        <p style={{ color:'#777', fontSize:13, lineHeight:1.65, margin:0 }}>
+          Live social listening data is not available for this brand yet. Add a Brand24 project or enable demo mode for the EastWest pitch snapshot.
+        </p>
+      </div>
+    );
+  }
+  const pos = social.sentiment.find(d => d.name === 'Positive')?.pct ?? 0;
+  const neg = social.sentiment.find(d => d.name === 'Negative')?.pct ?? 0;
+  const neu = social.sentiment.find(d => d.name === 'Neutral')?.pct ?? 0;
+  return (
+    <div style={{ marginBottom:16 }}>
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(320px, 1fr))', gap:12, alignItems:'start', marginBottom:12 }}>
+        <div>
+          <h2 style={{ fontSize:20, margin:'0 0 8px', fontWeight:800 }}>Top Mentions</h2>
+          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(280px, 1fr))', gap:8 }}>
+            {social.mentions.map((mention, i) => <MentionCard key={i} mention={mention}/>)}
+          </div>
+        </div>
+        <div>
+          <h2 style={{ fontSize:20, margin:'0 0 8px', fontWeight:800 }}>Overview</h2>
+          <OverviewGrid items={social.overview}/>
+        </div>
+      </div>
+
+      <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(320px, 1fr))', gap:12 }}>
+        <div style={{ ...CARD, minHeight:270 }}>
+          <h2 style={{ fontSize:20, margin:'0 0 12px', fontWeight:800 }}>Sources Share</h2>
+          <div style={{ color:'#f0f0f0', fontSize:15, fontWeight:800, marginBottom:6 }}>Social media dominance</div>
+          <p style={{ color:'#9ca3af', fontSize:12, margin:'0 0 18px' }}>Most mentions come from social media, specifically Facebook.</p>
+          <DonutChart data={social.sources}/>
+        </div>
+        <div style={{ ...CARD, minHeight:270 }}>
+          <h2 style={{ fontSize:20, margin:'0 0 12px', fontWeight:800 }}>Sentiment Share</h2>
+          <div style={{ color:'#f0f0f0', fontSize:15, fontWeight:800, marginBottom:6 }}>
+            {pos > neg * 2 ? 'Overwhelmingly positive' : neg > pos ? 'Negative pressure building' : 'Mostly neutral conversation'}
+          </div>
+          <p style={{ color:'#9ca3af', fontSize:12, margin:'0 0 8px' }}>
+            There are {neg ? (pos / neg).toFixed(1) : 'many'} times more positive than negative mentions ({pos}% vs. {neg}%). The most common sentiment is neutral ({neu}%).
+          </p>
+          <SentimentGauge data={social.sentiment}/>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── MAIN APP ──────────────────────────────────────────────────
 export default function SignalIntel() {
   const [step, setStep] = useState('setup');
@@ -317,6 +624,16 @@ export default function SignalIntel() {
   const { metrics, context, analysis, competitive, report } = out;
   const hasB24 = !!metrics?.found;
   const hasGrok = !!context?.grokSignals;
+  const useEastWestDemo = DEMO_MODE && !hasB24 && brand.toLowerCase().includes('eastwest');
+  const displayMetrics = useEastWestDemo ? EASTWEST_DEMO_METRICS : metrics;
+  const displaySummary = useEastWestDemo
+    ? `${brand} recorded approximately 2,281 mentions from June 22 to July 22, 2026, averaging about 74 mentions per day. Conversation was shaped by two major spikes: the June 25 Garmin Pay launch and the July 9 InstaPay/PESONet fee waiver announcement. Reach also over-indexed on June 28, when a single viral article generated 3.38M reach despite only 58 mentions.`
+    : analysis?.executiveSummary;
+  const displaySpikeDrivers = useEastWestDemo ? EASTWEST_DEMO_SPIKES : analysis?.spikeDrivers;
+  const displayEvents = context?.events?.length ? context.events : (useEastWestDemo ? EASTWEST_DEMO_EVENTS : []);
+  const displaySentimentNarrative = useEastWestDemo
+    ? 'Conversation was mostly neutral, with positive lift around fee waivers, Garmin Pay, and owned event content. Negative mentions remained comparatively low and were outweighed by positive campaign and service-announcement reactions.'
+    : analysis?.sentimentNarrative;
 
   // ── SETUP SCREEN ────────────────────────────────────────────
   if (step === 'setup') return (
@@ -442,14 +759,17 @@ export default function SignalIntel() {
         {/* Executive Summary */}
         <div style={{ background:'#0d1100', border:`1px solid ${LIME}20`, borderRadius:10, padding:'16px 20px', marginBottom:14 }}>
           <div style={{ color:LIME, fontSize:10, letterSpacing:'0.18em', textTransform:'uppercase', marginBottom:8, fontFamily:"'JetBrains Mono',monospace" }}>Executive Summary · Analyst</div>
-          <p style={{ color:'#d0d0d0', lineHeight:1.75, margin:0, fontSize:14 }}>{analysis.executiveSummary}</p>
+          <p style={{ color:'#d0d0d0', lineHeight:1.75, margin:0, fontSize:14 }}>{displaySummary}</p>
         </div>
+
+        {/* Social Listening Snapshot */}
+        <SocialListeningReport brand={brand} metrics={metrics} demoMode={DEMO_MODE}/>
 
         {/* Metrics */}
         <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, marginBottom:14 }}>
-          <Metric label="Total Mentions" value={fmt(metrics.mentions.total)} sub={hasB24?`Brand24 live · ${metrics.projectName||''}`:'No Brand24 project'}/>
-          <Metric label="Total Reach" value={fmt(metrics.totalReach)} sub="30-day period"/>
-          <Metric label="Daily Avg" value={metrics.mentions.dailyAvg}/>
+          <Metric label="Total Mentions" value={fmt(displayMetrics.mentions.total)} sub={hasB24?`Brand24 live · ${displayMetrics.projectName||''}`:useEastWestDemo?'EastWest demo report':'No Brand24 project'}/>
+          <Metric label="Total Reach" value={fmt(displayMetrics.totalReach)} sub="30-day period"/>
+          <Metric label="Daily Avg" value={displayMetrics.mentions.dailyAvg}/>
         </div>
 
         {/* Spike Drivers */}
@@ -461,7 +781,7 @@ export default function SignalIntel() {
               {hasGrok && <span style={{ background:'#1DA1F222', border:'1px solid #1DA1F244', borderRadius:10, padding:'2px 8px', fontSize:9, color:'#1DA1F2' }}>GROK ✓</span>}
             </div>
           </div>
-          {analysis.spikeDrivers?.map((d,i) => (
+          {displaySpikeDrivers?.map((d,i) => (
             <div key={i} style={{ display:'flex', gap:12, fontSize:13, color:'#ccc', lineHeight:1.6, marginBottom:9 }}>
               <span style={{ color:LIME, fontFamily:"'JetBrains Mono',monospace", fontSize:11, flexShrink:0, marginTop:2 }}>0{i+1}</span>{d}
             </div>
@@ -472,15 +792,15 @@ export default function SignalIntel() {
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:14 }}>
           <div style={CARD}>
             <div style={{ color:'#666', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:12 }}>Sentiment · Brand24</div>
-            <SentBar label="Positive" count={metrics.sentiment.positive.count} pct={metrics.sentiment.positive.pct} color="#44ff88"/>
-            <SentBar label="Neutral"  count={metrics.sentiment.neutral.count}  pct={metrics.sentiment.neutral.pct}  color="#555"/>
-            <SentBar label="Negative" count={metrics.sentiment.negative.count} pct={metrics.sentiment.negative.pct} color="#ff6666"/>
-            <p style={{ color:'#555', fontSize:12, margin:'10px 0 0', lineHeight:1.65 }}>{analysis.sentimentNarrative}</p>
+            <SentBar label="Positive" count={displayMetrics.sentiment.positive.count} pct={displayMetrics.sentiment.positive.pct} color="#44ff88"/>
+            <SentBar label="Neutral"  count={displayMetrics.sentiment.neutral.count}  pct={displayMetrics.sentiment.neutral.pct}  color="#555"/>
+            <SentBar label="Negative" count={displayMetrics.sentiment.negative.count} pct={displayMetrics.sentiment.negative.pct} color="#ff6666"/>
+            <p style={{ color:'#555', fontSize:12, margin:'10px 0 0', lineHeight:1.65 }}>{displaySentimentNarrative}</p>
           </div>
           <div style={CARD}>
             <div style={{ color:'#666', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:12 }}>Brand24 Events · Context Scout</div>
-            {context?.events?.length > 0
-              ? context.events.slice(0,3).map((e,i) => (
+            {displayEvents.length > 0
+              ? displayEvents.slice(0,3).map((e,i) => (
                 <div key={i} style={{ marginBottom:10 }}>
                   <div style={{ color:'#d0d0d0', fontSize:12, fontWeight:600, marginBottom:2 }}>{e.date}</div>
                   <div style={{ color:'#666', fontSize:11, lineHeight:1.5 }}>{e.description}</div>
