@@ -9,6 +9,7 @@ export async function POST(request) {
         'Content-Type': 'application/json',
         'x-api-key': process.env.ANTHROPIC_API_KEY,
         'anthropic-version': '2023-06-01',
+        'anthropic-beta': 'mcp-client-2025-11-20',
       },
       body: JSON.stringify({
         ...body,
