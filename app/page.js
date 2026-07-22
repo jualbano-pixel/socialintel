@@ -16,6 +16,18 @@ function parseJSON(text, fallback = {}) {
   return fallback;
 }
 
+function parseClaudeText(data) {
+  return data?.content?.[0]?.text ?? data?.content?.find?.(b => b.type === 'text')?.text ?? null;
+}
+
+function parseGrokText(data) {
+  return data?.output?.[1]?.content?.[0]?.text
+    ?? data?.output_text
+    ?? data?.output?.find?.(b => b.type === 'message')?.content?.[0]?.text
+    ?? data?.output?.find?.(b => b.content?.[0]?.text)?.content?.[0]?.text
+    ?? null;
+}
+
 // ── Date parser ───────────────────────────────────────────────
 function parsePeriod(period) {
   try {
@@ -34,17 +46,20 @@ async function claude(prompt, maxTokens = 600, fallback = {}) {
   try {
     const r = await fetch('/api/claude', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: CLAUDE_MODEL, max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] }) });
-    return parseJSON((await r.json()).content?.find(b => b.type === 'text')?.text ?? '{}', fallback);
+    return parseJSON(parseClaudeText(await r.json()) ?? '{}', fallback);
   } catch(e) { console.warn('Claude:', e.message); return fallback; }
 }
 
-async function claudeText(prompt, maxTokens = 700) {
-  try {
-    const r = await fetch('/api/claude', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: CLAUDE_MODEL, max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] }) });
-    const data = await r.json();
-    return data.content?.find(b => b.type === 'text')?.text ?? data.error?.message ?? 'No response returned.';
-  } catch(e) { console.warn('Claude:', e.message); return `Claude error: ${e.message}`; }
+async function claudeText(prompt, maxTokens = 700, label = 'Ask AI') {
+  const payload = { model: CLAUDE_MODEL, max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] };
+  console.log(`[${label}] /api/claude request`, payload);
+  const r = await fetch('/api/claude', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  const data = await r.json();
+  console.log(`[${label}] /api/claude response`, data);
+  if (!r.ok || data.error) throw new Error(data.error?.message || data.error || `Claude request failed with ${r.status}`);
+  const text = parseClaudeText(data);
+  if (!text) throw new Error('Claude response did not include data.content[0].text');
+  return text;
 }
 
 async function claudeB24(prompt, maxTokens = 1500) {
@@ -68,24 +83,27 @@ async function callGrok(brand, competitors, period) {
       })
     });
     const d = await r.json();
-    return d.output_text ?? d.output?.[0]?.content?.[0]?.text ?? null;
+    return parseGrokText(d);
   } catch(e) { console.warn('Grok:', e.message); return null; }
 }
 
-async function grokIntel(prompt) {
-  try {
-    const r = await fetch('/api/grok', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'grok-4.3',
-        input: [
-          { role: 'system', content: 'Social media intelligence analyst. Return specific public posts, URLs when available, concise summaries, and clearly separate facts from inference.' },
-          { role: 'user', content: prompt }
-        ],
-        tools: [{ type: 'x_search' }, { type: 'web_search' }]
-      })
-    });
-    const d = await r.json();
-    return d.output_text ?? d.output?.[0]?.content?.[0]?.text ?? d.error?.message ?? 'No Grok response returned.';
-  } catch(e) { console.warn('Grok:', e.message); return `Grok error: ${e.message}`; }
+async function grokIntel(prompt, label = 'Grok Query') {
+  const payload = {
+    model: 'grok-4.3',
+    input: [
+      { role: 'system', content: 'Social media intelligence analyst. Return specific public posts, URLs when available, concise summaries, and clearly separate facts from inference.' },
+      { role: 'user', content: prompt }
+    ],
+    tools: [{ type: 'x_search' }, { type: 'web_search' }]
+  };
+  console.log(`[${label}] /api/grok request`, payload);
+  const r = await fetch('/api/grok', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  const d = await r.json();
+  console.log(`[${label}] /api/grok response`, d);
+  if (!r.ok || d.error) throw new Error(d.error?.message || d.error || `Grok request failed with ${r.status}`);
+  const text = parseGrokText(d);
+  if (!text) throw new Error('Grok response did not include data.output[1].content[0].text');
+  return text;
 }
 
 // ── MOCK fallback ─────────────────────────────────────────────
@@ -317,7 +335,16 @@ function TextBlock({ text }) {
   );
 }
 
-function IntelligenceQuery({ query, setQuery, loading, result, open, setOpen, onSubmit }) {
+function ErrorMessage({ message }) {
+  if (!message) return null;
+  return (
+    <div style={{ background:'#1a0000', border:'1px solid #ff444433', borderRadius:6, color:'#ff8a8a', fontSize:12, lineHeight:1.55, padding:'10px 12px', marginTop:12 }}>
+      {message}
+    </div>
+  );
+}
+
+function IntelligenceQuery({ query, setQuery, loading, result, error, open, setOpen, onSubmit }) {
   return (
     <div style={{ ...CARD, marginBottom:14, borderColor:'#1DA1F244' }}>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:12, marginBottom:12 }}>
@@ -331,6 +358,7 @@ function IntelligenceQuery({ query, setQuery, loading, result, open, setOpen, on
         <input value={query} onChange={e => setQuery(e.target.value)} placeholder="What are people saying about card delivery?" style={{ flex:1, minWidth:0, background:'#0b0b0b', border:'1px solid #252525', borderRadius:6, color:'#f0f0f0', padding:'11px 12px', fontSize:13 }}/>
         <button disabled={loading || !query.trim()} style={{ background:loading?'#222':'#1DA1F2', color:'#fff', border:'none', borderRadius:6, padding:'0 15px', cursor:loading?'default':'pointer', fontSize:12, fontWeight:700 }}>{loading?'Searching...':'Search'}</button>
       </form>
+      <ErrorMessage message={error}/>
       {result && open && (
         <div style={{ marginTop:14, paddingTop:14, borderTop:'1px solid #202020' }}>
           <TextBlock text={result}/>
@@ -380,14 +408,17 @@ export default function SignalIntel() {
   const [aiQuestion, setAiQuestion] = useState('');
   const [aiMessages, setAiMessages] = useState([]);
   const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState('');
   const [sentimentOpen, setSentimentOpen] = useState(false);
   const [sentimentLabel, setSentimentLabel] = useState('');
   const [sentimentResult, setSentimentResult] = useState('');
   const [sentimentLoading, setSentimentLoading] = useState(false);
+  const [sentimentError, setSentimentError] = useState('');
   const [query, setQuery] = useState('');
   const [queryResult, setQueryResult] = useState('');
   const [queryOpen, setQueryOpen] = useState(false);
   const [queryLoading, setQueryLoading] = useState(false);
+  const [queryError, setQueryError] = useState('');
 
   const sa = (k, v) => setAgents(p => ({ ...p, [k]: v }));
   const so = (k, v) => setOut(p => ({ ...p, [k]: v }));
@@ -439,9 +470,11 @@ export default function SignalIntel() {
     const question = aiQuestion.trim();
     setAiMessages(p => [...p, { role:'user', text:question }]);
     setAiQuestion('');
+    setAiError('');
     setAiLoading(true);
-    const answer = await claudeText(
-      `You are the Signal Intel report assistant. Use only the report context below unless you clearly label a recommendation as inference.
+    try {
+      const answer = await claudeText(
+        `You are the Signal Intel report assistant. Use only the report context below unless you clearly label a recommendation as inference.
 
 REPORT CONTEXT:
 ${reportContext}
@@ -449,10 +482,17 @@ ${reportContext}
 USER QUESTION:
 ${question}
 
-Answer concisely with specific numbers, drivers, and next actions when useful.`
-    );
-    setAiMessages(p => [...p, { role:'assistant', text:answer }]);
-    setAiLoading(false);
+Answer concisely with specific numbers, drivers, and next actions when useful.`,
+        700,
+        'Ask AI'
+      );
+      setAiMessages(p => [...p, { role:'assistant', text:answer }]);
+    } catch (e) {
+      console.error('[Ask AI] error', e);
+      setAiError(e.message);
+    } finally {
+      setAiLoading(false);
+    }
   };
 
   const searchSentiment = async sentiment => {
@@ -460,13 +500,21 @@ Answer concisely with specific numbers, drivers, and next actions when useful.`
     setSentimentOpen(true);
     setSentimentLoading(true);
     setSentimentResult('');
-    const result = await grokIntel(
-      `Find the top 5 real public posts or web mentions about "${brand}" in the Philippines during ${period} with ${sentiment.toLowerCase()} sentiment.
+    setSentimentError('');
+    try {
+      const result = await grokIntel(
+        `Find the top 5 real public posts or web mentions about "${brand}" in the Philippines during ${period} with ${sentiment.toLowerCase()} sentiment.
 For each result include source/platform, date if available, author or outlet if available, a short paraphrase, URL if available, and why it matches ${sentiment.toLowerCase()} sentiment.
-Start with a one-paragraph summary. Label uncertain matches.`
-    );
-    setSentimentResult(result);
-    setSentimentLoading(false);
+Start with a one-paragraph summary. Label uncertain matches.`,
+        `Clickable Sentiment: ${sentiment}`
+      );
+      setSentimentResult(result);
+    } catch (e) {
+      console.error(`[Clickable Sentiment: ${sentiment}] error`, e);
+      setSentimentError(e.message);
+    } finally {
+      setSentimentLoading(false);
+    }
   };
 
   const runTopicQuery = async e => {
@@ -474,13 +522,22 @@ Start with a one-paragraph summary. Label uncertain matches.`
     if (!query.trim() || queryLoading) return;
     setQueryLoading(true);
     setQueryOpen(true);
-    const result = await grokIntel(
-      `Search live X/Twitter and the web for "${brand}" in the Philippines during ${period}.
+    setQueryError('');
+    setQueryResult('');
+    try {
+      const result = await grokIntel(
+        `Search live X/Twitter and the web for "${brand}" in the Philippines during ${period}.
 Topic query: "${query.trim()}"
-Return a concise intelligence summary, recurring themes, specific public posts or articles with URLs when available, sentiment read, and recommended brand action.`
-    );
-    setQueryResult(result);
-    setQueryLoading(false);
+Return a concise intelligence summary, recurring themes, specific public posts or articles with URLs when available, sentiment read, and recommended brand action.`,
+        'Grok Query'
+      );
+      setQueryResult(result);
+    } catch (e) {
+      console.error('[Grok Query] error', e);
+      setQueryError(e.message);
+    } finally {
+      setQueryLoading(false);
+    }
   };
 
   // ── SETUP SCREEN ────────────────────────────────────────────
@@ -610,7 +667,7 @@ Return a concise intelligence summary, recurring themes, specific public posts o
           <p style={{ color:'#d0d0d0', lineHeight:1.75, margin:0, fontSize:14 }}>{analysis.executiveSummary}</p>
         </div>
 
-        <IntelligenceQuery query={query} setQuery={setQuery} loading={queryLoading} result={queryResult} open={queryOpen} setOpen={setQueryOpen} onSubmit={runTopicQuery}/>
+        <IntelligenceQuery query={query} setQuery={setQuery} loading={queryLoading} result={queryResult} error={queryError} open={queryOpen} setOpen={setQueryOpen} onSubmit={runTopicQuery}/>
 
         {/* Metrics */}
         <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, marginBottom:14 }}>
@@ -774,6 +831,7 @@ Return a concise intelligence summary, recurring themes, specific public posts o
             </div>
           ))}
           {aiLoading && <div style={{ color:'#777', fontSize:12, fontFamily:"'JetBrains Mono',monospace" }}>Claude is reading the report...</div>}
+          <ErrorMessage message={aiError}/>
         </div>
         <form onSubmit={askAI} style={{ position:'sticky', bottom:0, background:'#0b0b0b', paddingTop:12, display:'flex', gap:8 }}>
           <textarea value={aiQuestion} onChange={e => setAiQuestion(e.target.value)} placeholder="Why is sentiment mostly neutral?" rows={3} style={{ flex:1, resize:'vertical', background:'#111', border:'1px solid #252525', borderRadius:6, color:'#f0f0f0', padding:11, fontSize:13 }}/>
@@ -784,7 +842,10 @@ Return a concise intelligence summary, recurring themes, specific public posts o
       <Drawer open={sentimentOpen} title={`${sentimentLabel || 'Sentiment'} Posts`} eyebrow="Powered by Grok" onClose={() => setSentimentOpen(false)}>
         {sentimentLoading
           ? <div style={{ color:'#777', fontSize:12, fontFamily:"'JetBrains Mono',monospace" }}>Searching live posts...</div>
-          : <TextBlock text={sentimentResult}/>
+          : <>
+              <ErrorMessage message={sentimentError}/>
+              <TextBlock text={sentimentResult}/>
+            </>
         }
       </Drawer>
     </div>
