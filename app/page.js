@@ -370,7 +370,7 @@ function IntelligenceQuery({ query, setQuery, loading, result, error, open, setO
 
 function FloatingAskAI({ onClick }) {
   return (
-    <button type="button" onClick={onClick} style={{ position:'fixed', right:22, bottom:22, zIndex:1000, background:LIME, color:'#000', border:'1px solid #000', borderRadius:999, padding:'14px 18px', fontWeight:800, fontSize:13, boxShadow:`0 10px 30px ${LIME}33`, cursor:'pointer' }}>
+    <button type="button" data-testid="ask-ai-floating" onClick={onClick} style={{ position:'fixed', right:24, bottom:88, zIndex:1000, background:LIME, color:'#000', border:'1px solid #000', borderRadius:999, padding:'14px 18px', fontWeight:800, fontSize:13, boxShadow:`0 10px 30px ${LIME}33`, cursor:'pointer' }}>
       Ask AI
     </button>
   );
@@ -656,7 +656,10 @@ Return a concise intelligence summary, recurring themes, specific public posts o
             <p style={{ color:'#555', fontSize:13, margin:0 }}>{period} · Prepared by Praxis Experiential</p>
           </div>
           <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:8 }}>
-            <button onClick={() => setStep('setup')} style={{ background:'#111', border:'1px solid #222', borderRadius:6, padding:'9px 14px', color:'#666', cursor:'pointer', fontSize:12 }}>← New Report</button>
+            <div style={{ display:'flex', gap:8, flexWrap:'wrap', justifyContent:'flex-end' }}>
+              <button type="button" data-testid="ask-ai-header" onClick={() => setAiOpen(true)} style={{ background:LIME, border:'1px solid #000', borderRadius:6, padding:'9px 14px', color:'#000', cursor:'pointer', fontSize:12, fontWeight:800 }}>Ask AI</button>
+              <button onClick={() => setStep('setup')} style={{ background:'#111', border:'1px solid #222', borderRadius:6, padding:'9px 14px', color:'#666', cursor:'pointer', fontSize:12 }}>← New Report</button>
+            </div>
             <div style={{ display:'flex', gap:4 }}>{AGENTS.map(a => <div key={a.key} title={a.name} style={{ width:8, height:8, borderRadius:'50%', background:'#44ff88' }}/>)}</div>
           </div>
         </div>
