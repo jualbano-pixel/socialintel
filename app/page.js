@@ -2,6 +2,7 @@
 import { useState } from 'react';
 
 const LIME = '#CCFF00';
+const CLAUDE_MODEL = 'claude-sonnet-4-6';
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
 const fmt = n => n >= 1e9 ? `${(n/1e9).toFixed(1)}B` : n >= 1e6 ? `${(n/1e6).toFixed(1)}M` : n >= 1e3 ? `${(n/1e3).toFixed(1)}K` : String(n || 0);
 const CARD = { background: '#111', border: '1px solid #1e1e1e', borderRadius: 10, padding: '18px 22px' };
@@ -14,6 +15,18 @@ function parseJSON(text, fallback = {}) {
   const s = c.indexOf('{'), e = c.lastIndexOf('}');
   if (s !== -1 && e > s) { try { const r = JSON.parse(c.substring(s, e + 1)); return Object.keys(r).length ? r : fallback; } catch {} }
   return fallback;
+}
+
+function parseClaudeText(data) {
+  return data?.content?.[0]?.text ?? data?.content?.find?.(b => b.type === 'text')?.text ?? null;
+}
+
+function parseGrokText(data) {
+  return data?.output?.[1]?.content?.[0]?.text
+    ?? data?.output_text
+    ?? data?.output?.find?.(b => b.type === 'message')?.content?.[0]?.text
+    ?? data?.output?.find?.(b => b.content?.[0]?.text)?.content?.[0]?.text
+    ?? null;
 }
 
 // ── Date parser ───────────────────────────────────────────────
@@ -33,15 +46,27 @@ function parsePeriod(period) {
 async function claude(prompt, maxTokens = 600, fallback = {}) {
   try {
     const r = await fetch('/api/claude', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] }) });
-    return parseJSON((await r.json()).content?.find(b => b.type === 'text')?.text ?? '{}', fallback);
+      body: JSON.stringify({ model: CLAUDE_MODEL, max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] }) });
+    return parseJSON(parseClaudeText(await r.json()) ?? '{}', fallback);
   } catch(e) { console.warn('Claude:', e.message); return fallback; }
+}
+
+async function claudeText(prompt, maxTokens = 700, label = 'Ask AI') {
+  const payload = { model: CLAUDE_MODEL, max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] };
+  console.log(`[${label}] /api/claude request`, payload);
+  const r = await fetch('/api/claude', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  const data = await r.json();
+  console.log(`[${label}] /api/claude response`, data);
+  if (!r.ok || data.error) throw new Error(data.error?.message || data.error || `Claude request failed with ${r.status}`);
+  const text = parseClaudeText(data);
+  if (!text) throw new Error('Claude response did not include data.content[0].text');
+  return text;
 }
 
 async function claudeB24(prompt, maxTokens = 1500) {
   try {
     const r = await fetch('/api/claude-b24', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'claude-sonnet-4-20250514', max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] }) });
+      body: JSON.stringify({ model: CLAUDE_MODEL, max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] }) });
     const data = await r.json();
     return data.content?.filter(b => b.type === 'text').map(b => b.text).join('') ?? '';
   } catch(e) { console.warn('Claude+B24:', e.message); return ''; }
@@ -59,8 +84,27 @@ async function callGrok(brand, competitors, period) {
       })
     });
     const d = await r.json();
-    return d.output_text ?? d.output?.[0]?.content?.[0]?.text ?? null;
+    return parseGrokText(d);
   } catch(e) { console.warn('Grok:', e.message); return null; }
+}
+
+async function grokIntel(prompt, label = 'Grok Query') {
+  const payload = {
+    model: 'grok-4.3',
+    input: [
+      { role: 'system', content: 'Social media intelligence analyst. Return specific public posts, URLs when available, concise summaries, and clearly separate facts from inference.' },
+      { role: 'user', content: prompt }
+    ],
+    tools: [{ type: 'x_search' }, { type: 'web_search' }]
+  };
+  console.log(`[${label}] /api/grok request`, payload);
+  const r = await fetch('/api/grok', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  const d = await r.json();
+  console.log(`[${label}] /api/grok response`, d);
+  if (!r.ok || d.error) throw new Error(d.error?.message || d.error || `Grok request failed with ${r.status}`);
+  const text = parseGrokText(d);
+  if (!text) throw new Error('Grok response did not include data.output[1].content[0].text');
+  return text;
 }
 
 // ── MOCK fallback ─────────────────────────────────────────────
@@ -234,17 +278,17 @@ function Metric({ label, value, sub }) {
   );
 }
 
-function SentBar({ label, count, pct, color }) {
+function SentBar({ label, count, pct, color, onClick }) {
   return (
-    <div style={{ marginBottom:12 }}>
+    <button onClick={onClick} style={{ display:'block', width:'100%', background:'none', border:'none', padding:0, margin:'0 0 12px', cursor:onClick?'pointer':'default', textAlign:'left' }}>
       <div style={{ display:'flex', justifyContent:'space-between', marginBottom:5 }}>
         <span style={{ color:'#aaa', fontSize:12 }}>{label}</span>
-        <span style={{ color:'#f0f0f0', fontSize:12, fontFamily:"'JetBrains Mono',monospace" }}>{count} · {pct}%</span>
+        <span style={{ color:'#f0f0f0', fontSize:12, fontFamily:"'JetBrains Mono',monospace" }}>{count} · {pct}% ↗</span>
       </div>
       <div style={{ height:5, background:'#1a1a1a', borderRadius:3 }}>
         <div style={{ height:'100%', width:`${Math.min(pct,100)}%`, background:color, borderRadius:3 }}/>
       </div>
-    </div>
+    </button>
   );
 }
 
@@ -284,60 +328,12 @@ const DEMO_SOCIAL_LISTENING = {
     { label: 'Total social media interactions', value: '293K', change: '+734%', tone: 'up' },
   ],
   mentions: [
-    {
-      source: 'reddit.com',
-      title: 'EastWest Bank makes InstaPay and PESONet transfers free starting July 15',
-      meta: '09 Jul, 2026',
-      sentiment: 'Positive',
-      text: 'EastWest Bank became the latest bank to offer free InstaPay and PESONet fund transfers, giving customers one more way to save on everyday banking.',
-      icon: 'RD',
-      color: '#ff4500',
-    },
-    {
-      source: 'instagram.com',
-      title: 'eastwestbanker',
-      meta: '724 followers · 14 Jul, 2026',
-      sentiment: 'Positive',
-      text: 'Dream Run 2026 content carried upbeat reactions around the CDO leg, registration pushes, and community participation.',
-      icon: 'IG',
-      color: '#e1306c',
-    },
-    {
-      source: 'musictech.com',
-      title: 'EastWest Sounds DrumX Plugin',
-      meta: '21 Jul, 2026',
-      sentiment: 'Neutral',
-      text: 'Music and creator mentions used the EastWest name in a separate entertainment/software context, contributing neutral search noise.',
-      icon: 'MT',
-      color: '#00d2ff',
-    },
-    {
-      source: 'facebook.com',
-      title: 'EastWest Bank',
-      meta: '825K followers · 14 Jul, 2026',
-      sentiment: 'Positive',
-      text: 'Facebook amplified Dream Run 2026 registration and event reminders with strong reach from the owned audience base.',
-      icon: 'FB',
-      color: '#1877f2',
-    },
-    {
-      source: 'ph.jobstreet.com',
-      title: 'Bayani Esteban Jr, Loan Specialist at EastWest Rural Bank, Inc.',
-      meta: '21 Jul, 2026',
-      sentiment: 'Neutral',
-      text: 'Hiring and professional profile pages added recurring non-social mentions around EastWest banking roles.',
-      icon: 'JS',
-      color: '#0b3d91',
-    },
-    {
-      source: 'x.com',
-      title: 'FretlessMonster',
-      meta: '920 views · 18K followers · 20 Jul, 2026',
-      sentiment: 'Positive',
-      text: 'Entertainment conversation referenced EastWest Studios and musician activity, helping explain positive but non-bank-related lift.',
-      icon: 'X',
-      color: '#9ca3af',
-    },
+    { source: 'reddit.com', title: 'EastWest Bank makes InstaPay and PESONet transfers free starting July 15', meta: '09 Jul, 2026', sentiment: 'Positive', text: 'EastWest Bank became the latest bank to offer free InstaPay and PESONet fund transfers, giving customers one more way to save on everyday banking.', icon: 'RD', color: '#ff4500' },
+    { source: 'instagram.com', title: 'eastwestbanker', meta: '724 followers · 14 Jul, 2026', sentiment: 'Positive', text: 'Dream Run 2026 content carried upbeat reactions around the CDO leg, registration pushes, and community participation.', icon: 'IG', color: '#e1306c' },
+    { source: 'musictech.com', title: 'EastWest Sounds DrumX Plugin', meta: '21 Jul, 2026', sentiment: 'Neutral', text: 'Music and creator mentions used the EastWest name in a separate entertainment/software context, contributing neutral search noise.', icon: 'MT', color: '#00d2ff' },
+    { source: 'facebook.com', title: 'EastWest Bank', meta: '825K followers · 14 Jul, 2026', sentiment: 'Positive', text: 'Facebook amplified Dream Run 2026 registration and event reminders with strong reach from the owned audience base.', icon: 'FB', color: '#1877f2' },
+    { source: 'ph.jobstreet.com', title: 'Bayani Esteban Jr, Loan Specialist at EastWest Rural Bank, Inc.', meta: '21 Jul, 2026', sentiment: 'Neutral', text: 'Hiring and professional profile pages added recurring non-social mentions around EastWest banking roles.', icon: 'JS', color: '#0b3d91' },
+    { source: 'x.com', title: 'FretlessMonster', meta: '920 views · 18K followers · 20 Jul, 2026', sentiment: 'Positive', text: 'Entertainment conversation referenced EastWest Studios and musician activity, helping explain positive but non-bank-related lift.', icon: 'X', color: '#9ca3af' },
   ],
   sources: [
     { name: 'Facebook', pct: 34.7, color: '#33b6b4' },
@@ -571,6 +567,92 @@ function SocialListeningReport({ brand, metrics, demoMode }) {
   );
 }
 
+function Drawer({ open, title, eyebrow, onClose, children }) {
+  if (!open) return null;
+  return (
+    <div style={{ position:'fixed', inset:0, zIndex:50, pointerEvents:'auto' }}>
+      <button aria-label="Close drawer" onClick={onClose} style={{ position:'absolute', inset:0, background:'#0008', border:'none', cursor:'pointer' }}/>
+      <aside style={{ position:'absolute', top:0, right:0, width:'min(100vw, 430px)', height:'100%', background:'#0b0b0b', borderLeft:'1px solid #242424', boxShadow:'-16px 0 40px #0008', padding:20, overflowY:'auto' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', gap:12, alignItems:'flex-start', marginBottom:18 }}>
+          <div>
+            {eyebrow && <div style={{ color:LIME, fontSize:10, letterSpacing:'0.15em', textTransform:'uppercase', fontFamily:"'JetBrains Mono',monospace", marginBottom:5 }}>{eyebrow}</div>}
+            <h2 style={{ color:'#f0f0f0', fontSize:22, margin:0 }}>{title}</h2>
+          </div>
+          <button onClick={onClose} style={{ width:32, height:32, borderRadius:6, border:'1px solid #252525', background:'#111', color:'#777', cursor:'pointer', fontSize:18 }}>×</button>
+        </div>
+        {children}
+      </aside>
+    </div>
+  );
+}
+
+function TextBlock({ text }) {
+  return (
+    <div style={{ color:'#c9c9c9', fontSize:13, lineHeight:1.7, whiteSpace:'pre-wrap' }}>
+      {text || 'No response yet.'}
+    </div>
+  );
+}
+
+function ErrorMessage({ message }) {
+  if (!message) return null;
+  return (
+    <div style={{ background:'#1a0000', border:'1px solid #ff444433', borderRadius:6, color:'#ff8a8a', fontSize:12, lineHeight:1.55, padding:'10px 12px', marginTop:12 }}>
+      {message}
+    </div>
+  );
+}
+
+function IntelligenceQuery({ query, setQuery, loading, result, error, open, setOpen, onSubmit }) {
+  return (
+    <div style={{ ...CARD, marginBottom:14, borderColor:'#1DA1F244' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:12, marginBottom:12 }}>
+        <div>
+          <div style={{ color:'#1DA1F2', fontSize:10, letterSpacing:'0.16em', textTransform:'uppercase', fontFamily:"'JetBrains Mono',monospace", marginBottom:4 }}>Intelligence Query — Grok Live Search</div>
+          <div style={{ color:'#aaa', fontSize:12 }}>Ask about a topic, complaint, campaign, or audience question.</div>
+        </div>
+        {result && <button onClick={() => setOpen(!open)} style={{ background:'#111', border:'1px solid #252525', borderRadius:6, color:'#777', padding:'8px 10px', cursor:'pointer', fontSize:11 }}>{open?'Collapse':'Expand'}</button>}
+      </div>
+      <form onSubmit={onSubmit} style={{ display:'flex', gap:8 }}>
+        <input value={query} onChange={e => setQuery(e.target.value)} placeholder="What are people saying about card delivery?" style={{ flex:1, minWidth:0, background:'#0b0b0b', border:'1px solid #252525', borderRadius:6, color:'#f0f0f0', padding:'11px 12px', fontSize:13 }}/>
+        <button disabled={loading || !query.trim()} style={{ background:loading?'#222':'#1DA1F2', color:'#fff', border:'none', borderRadius:6, padding:'0 15px', cursor:loading?'default':'pointer', fontSize:12, fontWeight:700 }}>{loading?'Searching...':'Search'}</button>
+      </form>
+      <ErrorMessage message={error}/>
+      {result && open && (
+        <div style={{ marginTop:14, paddingTop:14, borderTop:'1px solid #202020' }}>
+          <TextBlock text={result}/>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FloatingAskAI({ onClick }) {
+  return (
+    <button type="button" data-testid="ask-ai-floating" onClick={onClick} style={{ position:'fixed', right:24, bottom:88, zIndex:1000, background:LIME, color:'#000', border:'1px solid #000', borderRadius:999, padding:'14px 18px', fontWeight:800, fontSize:13, boxShadow:`0 10px 30px ${LIME}33`, cursor:'pointer' }}>
+      Ask AI
+    </button>
+  );
+}
+
+function composeReportContext({ brand, period, metrics, context, analysis, competitive, report }) {
+  return `
+Brand: ${brand}
+Period: ${period}
+Mentions: ${metrics?.mentions?.total ?? 0}
+Daily average: ${metrics?.mentions?.dailyAvg ?? 0}
+Reach: ${fmt(metrics?.totalReach ?? 0)}
+Sentiment: ${metrics?.sentiment?.positive?.pct ?? 0}% positive, ${metrics?.sentiment?.neutral?.pct ?? 0}% neutral, ${metrics?.sentiment?.negative?.pct ?? 0}% negative
+Executive summary: ${analysis?.executiveSummary || 'n/a'}
+Spike drivers: ${analysis?.spikeDrivers?.join(' | ') || 'n/a'}
+Sentiment narrative: ${analysis?.sentimentNarrative || 'n/a'}
+Brand24 events: ${context?.events?.map(e => `${e.date}: ${e.description}`).join(' | ') || 'n/a'}
+Grok signals: ${context?.grokSignals?.substring(0, 1200) || 'n/a'}
+Share of voice: ${competitive?.sovData?.map(s => `${s.brand}: ${s.found ? `${s.percentage}% (${s.mentions})` : 'no project'}`).join(' | ') || 'n/a'}
+Recommendations: ${report?.recommendations?.join(' | ') || 'n/a'}
+`;
+}
+
 // ── MAIN APP ──────────────────────────────────────────────────
 export default function SignalIntel() {
   const [step, setStep] = useState('setup');
@@ -581,6 +663,21 @@ export default function SignalIntel() {
   const [agents, setAgents] = useState(IDLE);
   const [out, setOut] = useState({});
   const [error, setError] = useState('');
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiQuestion, setAiQuestion] = useState('');
+  const [aiMessages, setAiMessages] = useState([]);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState('');
+  const [sentimentOpen, setSentimentOpen] = useState(false);
+  const [sentimentLabel, setSentimentLabel] = useState('');
+  const [sentimentResult, setSentimentResult] = useState('');
+  const [sentimentLoading, setSentimentLoading] = useState(false);
+  const [sentimentError, setSentimentError] = useState('');
+  const [query, setQuery] = useState('');
+  const [queryResult, setQueryResult] = useState('');
+  const [queryOpen, setQueryOpen] = useState(false);
+  const [queryLoading, setQueryLoading] = useState(false);
+  const [queryError, setQueryError] = useState('');
 
   const sa = (k, v) => setAgents(p => ({ ...p, [k]: v }));
   const so = (k, v) => setOut(p => ({ ...p, [k]: v }));
@@ -634,6 +731,89 @@ export default function SignalIntel() {
   const displaySentimentNarrative = useEastWestDemo
     ? 'Conversation was mostly neutral, with positive lift around fee waivers, Garmin Pay, and owned event content. Negative mentions remained comparatively low and were outweighed by positive campaign and service-announcement reactions.'
     : analysis?.sentimentNarrative;
+  const displayAnalysis = {
+    ...analysis,
+    executiveSummary: displaySummary,
+    spikeDrivers: displaySpikeDrivers,
+    sentimentNarrative: displaySentimentNarrative,
+  };
+  const reportContext = composeReportContext({ brand, period, metrics: displayMetrics, context, analysis: displayAnalysis, competitive, report });
+
+  const askAI = async e => {
+    e.preventDefault();
+    if (!aiQuestion.trim() || aiLoading) return;
+    const question = aiQuestion.trim();
+    setAiMessages(p => [...p, { role:'user', text:question }]);
+    setAiQuestion('');
+    setAiError('');
+    setAiLoading(true);
+    try {
+      const answer = await claudeText(
+        `You are the Signal Intel report assistant. Use only the report context below unless you clearly label a recommendation as inference.
+
+REPORT CONTEXT:
+${reportContext}
+
+USER QUESTION:
+${question}
+
+Answer concisely with specific numbers, drivers, and next actions when useful.`,
+        700,
+        'Ask AI'
+      );
+      setAiMessages(p => [...p, { role:'assistant', text:answer }]);
+    } catch (e) {
+      console.error('[Ask AI] error', e);
+      setAiError(e.message);
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const searchSentiment = async sentiment => {
+    setSentimentLabel(sentiment);
+    setSentimentOpen(true);
+    setSentimentLoading(true);
+    setSentimentResult('');
+    setSentimentError('');
+    try {
+      const result = await grokIntel(
+        `Find the top 5 real public posts or web mentions about "${brand}" in the Philippines during ${period} with ${sentiment.toLowerCase()} sentiment.
+For each result include source/platform, date if available, author or outlet if available, a short paraphrase, URL if available, and why it matches ${sentiment.toLowerCase()} sentiment.
+Start with a one-paragraph summary. Label uncertain matches.`,
+        `Clickable Sentiment: ${sentiment}`
+      );
+      setSentimentResult(result);
+    } catch (e) {
+      console.error(`[Clickable Sentiment: ${sentiment}] error`, e);
+      setSentimentError(e.message);
+    } finally {
+      setSentimentLoading(false);
+    }
+  };
+
+  const runTopicQuery = async e => {
+    e.preventDefault();
+    if (!query.trim() || queryLoading) return;
+    setQueryLoading(true);
+    setQueryOpen(true);
+    setQueryError('');
+    setQueryResult('');
+    try {
+      const result = await grokIntel(
+        `Search live X/Twitter and the web for "${brand}" in the Philippines during ${period}.
+Topic query: "${query.trim()}"
+Return a concise intelligence summary, recurring themes, specific public posts or articles with URLs when available, sentiment read, and recommended brand action.`,
+        'Grok Query'
+      );
+      setQueryResult(result);
+    } catch (e) {
+      console.error('[Grok Query] error', e);
+      setQueryError(e.message);
+    } finally {
+      setQueryLoading(false);
+    }
+  };
 
   // ── SETUP SCREEN ────────────────────────────────────────────
   if (step === 'setup') return (
@@ -751,7 +931,10 @@ export default function SignalIntel() {
             <p style={{ color:'#555', fontSize:13, margin:0 }}>{period} · Prepared by Praxis Experiential</p>
           </div>
           <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:8 }}>
-            <button onClick={() => setStep('setup')} style={{ background:'#111', border:'1px solid #222', borderRadius:6, padding:'9px 14px', color:'#666', cursor:'pointer', fontSize:12 }}>← New Report</button>
+            <div style={{ display:'flex', gap:8, flexWrap:'wrap', justifyContent:'flex-end' }}>
+              <button type="button" data-testid="ask-ai-header" onClick={() => setAiOpen(true)} style={{ background:LIME, border:'1px solid #000', borderRadius:6, padding:'9px 14px', color:'#000', cursor:'pointer', fontSize:12, fontWeight:800 }}>Ask AI</button>
+              <button onClick={() => setStep('setup')} style={{ background:'#111', border:'1px solid #222', borderRadius:6, padding:'9px 14px', color:'#666', cursor:'pointer', fontSize:12 }}>← New Report</button>
+            </div>
             <div style={{ display:'flex', gap:4 }}>{AGENTS.map(a => <div key={a.key} title={a.name} style={{ width:8, height:8, borderRadius:'50%', background:'#44ff88' }}/>)}</div>
           </div>
         </div>
@@ -762,8 +945,9 @@ export default function SignalIntel() {
           <p style={{ color:'#d0d0d0', lineHeight:1.75, margin:0, fontSize:14 }}>{displaySummary}</p>
         </div>
 
-        {/* Social Listening Snapshot */}
         <SocialListeningReport brand={brand} metrics={metrics} demoMode={DEMO_MODE}/>
+
+        <IntelligenceQuery query={query} setQuery={setQuery} loading={queryLoading} result={queryResult} error={queryError} open={queryOpen} setOpen={setQueryOpen} onSubmit={runTopicQuery}/>
 
         {/* Metrics */}
         <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, marginBottom:14 }}>
@@ -792,9 +976,9 @@ export default function SignalIntel() {
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:14 }}>
           <div style={CARD}>
             <div style={{ color:'#666', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:12 }}>Sentiment · Brand24</div>
-            <SentBar label="Positive" count={displayMetrics.sentiment.positive.count} pct={displayMetrics.sentiment.positive.pct} color="#44ff88"/>
-            <SentBar label="Neutral"  count={displayMetrics.sentiment.neutral.count}  pct={displayMetrics.sentiment.neutral.pct}  color="#555"/>
-            <SentBar label="Negative" count={displayMetrics.sentiment.negative.count} pct={displayMetrics.sentiment.negative.pct} color="#ff6666"/>
+            <SentBar label="Positive" count={displayMetrics.sentiment.positive.count} pct={displayMetrics.sentiment.positive.pct} color="#44ff88" onClick={() => searchSentiment('Positive')}/>
+            <SentBar label="Neutral"  count={displayMetrics.sentiment.neutral.count}  pct={displayMetrics.sentiment.neutral.pct}  color="#555" onClick={() => searchSentiment('Neutral')}/>
+            <SentBar label="Negative" count={displayMetrics.sentiment.negative.count} pct={displayMetrics.sentiment.negative.pct} color="#ff6666" onClick={() => searchSentiment('Negative')}/>
             <p style={{ color:'#555', fontSize:12, margin:'10px 0 0', lineHeight:1.65 }}>{displaySentimentNarrative}</p>
           </div>
           <div style={CARD}>
@@ -911,6 +1095,39 @@ export default function SignalIntel() {
         </div>
 
       </div>
+
+      <FloatingAskAI onClick={() => setAiOpen(true)}/>
+
+      <Drawer open={aiOpen} title="Ask AI" eyebrow="Claude · Report Context" onClose={() => setAiOpen(false)}>
+        <div style={{ display:'flex', flexDirection:'column', gap:12, marginBottom:14 }}>
+          {aiMessages.length === 0 && (
+            <div style={{ background:'#111', border:'1px solid #202020', borderRadius:8, padding:14 }}>
+              <p style={{ color:'#888', fontSize:13, lineHeight:1.6, margin:0 }}>Ask about the report: why sentiment moved, what to post next, which channels matter, or where the risks are.</p>
+            </div>
+          )}
+          {aiMessages.map((m,i) => (
+            <div key={i} style={{ alignSelf:m.role==='user'?'flex-end':'stretch', maxWidth:m.role==='user'?'88%':'100%', background:m.role==='user'?LIME:'#111', color:m.role==='user'?'#000':'#cfcfcf', border:m.role==='user'?'none':'1px solid #202020', borderRadius:8, padding:'11px 13px', fontSize:13, lineHeight:1.65, whiteSpace:'pre-wrap' }}>
+              {m.text}
+            </div>
+          ))}
+          {aiLoading && <div style={{ color:'#777', fontSize:12, fontFamily:"'JetBrains Mono',monospace" }}>Claude is reading the report...</div>}
+          <ErrorMessage message={aiError}/>
+        </div>
+        <form onSubmit={askAI} style={{ position:'sticky', bottom:0, background:'#0b0b0b', paddingTop:12, display:'flex', gap:8 }}>
+          <textarea value={aiQuestion} onChange={e => setAiQuestion(e.target.value)} placeholder="Why is sentiment mostly neutral?" rows={3} style={{ flex:1, resize:'vertical', background:'#111', border:'1px solid #252525', borderRadius:6, color:'#f0f0f0', padding:11, fontSize:13 }}/>
+          <button disabled={aiLoading || !aiQuestion.trim()} style={{ alignSelf:'stretch', background:aiLoading?'#222':LIME, color:'#000', border:'none', borderRadius:6, padding:'0 14px', cursor:aiLoading?'default':'pointer', fontSize:12, fontWeight:800 }}>Send</button>
+        </form>
+      </Drawer>
+
+      <Drawer open={sentimentOpen} title={`${sentimentLabel || 'Sentiment'} Posts`} eyebrow="Powered by Grok" onClose={() => setSentimentOpen(false)}>
+        {sentimentLoading
+          ? <div style={{ color:'#777', fontSize:12, fontFamily:"'JetBrains Mono',monospace" }}>Searching live posts...</div>
+          : <>
+              <ErrorMessage message={sentimentError}/>
+              <TextBlock text={sentimentResult}/>
+            </>
+        }
+      </Drawer>
     </div>
   );
 

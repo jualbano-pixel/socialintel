@@ -18,6 +18,7 @@ export async function POST(request) {
             type: 'url',
             url: 'https://mcp.brand24.com/v1/mcp',
             name: 'brand24',
+            ...(process.env.BRAND24_TOKEN && { authorization_token: process.env.BRAND24_TOKEN }),
           },
         ],
       }),
