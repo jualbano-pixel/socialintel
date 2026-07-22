@@ -370,7 +370,7 @@ function IntelligenceQuery({ query, setQuery, loading, result, error, open, setO
 
 function FloatingAskAI({ onClick }) {
   return (
-    <button onClick={onClick} style={{ position:'fixed', right:22, bottom:22, zIndex:40, background:LIME, color:'#000', border:'none', borderRadius:999, padding:'14px 18px', fontWeight:800, fontSize:13, boxShadow:`0 10px 30px ${LIME}22`, cursor:'pointer' }}>
+    <button type="button" onClick={onClick} style={{ position:'fixed', right:22, bottom:22, zIndex:1000, background:LIME, color:'#000', border:'1px solid #000', borderRadius:999, padding:'14px 18px', fontWeight:800, fontSize:13, boxShadow:`0 10px 30px ${LIME}33`, cursor:'pointer' }}>
       Ask AI
     </button>
   );
