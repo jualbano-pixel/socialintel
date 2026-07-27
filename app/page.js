@@ -32,9 +32,24 @@ function parseGrokText(data) {
 function parsePeriod(period) {
   try {
     const months = { january:'01',february:'02',march:'03',april:'04',may:'05',june:'06',july:'07',august:'08',september:'09',october:'10',november:'11',december:'12' };
-    const clean = period.toLowerCase().replace(/[–—]/g, '-');
-    const m = clean.match(/(\w+)\s+(\d+)-(\d+),?\s*(\d{4})/);
-    if (m) { const mo = months[m[1]] ?? '01'; return { startDate: `${m[4]}-${mo}-${m[2].padStart(2,'0')}`, endDate: `${m[4]}-${mo}-${m[3].padStart(2,'0')}` }; }
+    const clean = period.toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
+    const crossMonth = clean.match(/([a-z]+)\s+(\d{1,2})\s*-\s*([a-z]+)\s+(\d{1,2}),?\s*(\d{4})/);
+    if (crossMonth) {
+      const [, startMonth, startDay, endMonth, endDay, year] = crossMonth;
+      return {
+        startDate: `${year}-${months[startMonth] ?? '01'}-${startDay.padStart(2,'0')}`,
+        endDate: `${year}-${months[endMonth] ?? '01'}-${endDay.padStart(2,'0')}`,
+      };
+    }
+    const sameMonth = clean.match(/([a-z]+)\s+(\d{1,2})\s*-\s*(\d{1,2}),?\s*(\d{4})/);
+    if (sameMonth) {
+      const [, monthName, startDay, endDay, year] = sameMonth;
+      const month = months[monthName] ?? '01';
+      return {
+        startDate: `${year}-${month}-${startDay.padStart(2,'0')}`,
+        endDate: `${year}-${month}-${endDay.padStart(2,'0')}`,
+      };
+    }
   } catch {}
   const now = new Date(), month = new Date(now - 30*24*60*60*1000);
   const f = d => d.toISOString().split('T')[0];
