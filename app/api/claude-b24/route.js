@@ -15,9 +15,8 @@ export async function POST(request) {
         ...body,
         tools: [
           {
-            type: 'mcp',
-            name: 'brand24',
-            server_name: 'brand24',
+            type: 'mcp_toolset',
+            mcp_server_name: 'brand24',
           },
         ],
         mcp_servers: [
