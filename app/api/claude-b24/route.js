@@ -13,6 +13,13 @@ export async function POST(request) {
       },
       body: JSON.stringify({
         ...body,
+        tools: [
+          {
+            type: 'mcp',
+            name: 'brand24',
+            server_name: 'brand24',
+          },
+        ],
         mcp_servers: [
           {
             type: 'url',
