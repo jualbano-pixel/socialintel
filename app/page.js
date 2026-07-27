@@ -226,13 +226,39 @@ Return ONLY valid JSON:
   return data;
 }
 
-async function reportBuilderAgent(brand, analysis, competitive, context) {
+async function competitiveIntelLiteAgent(competitors, dateRange) {
+  if (!competitors?.length) return { competitors: [] };
+  try {
+    const payload = {
+      dateRange,
+      competitors: competitors.map(name => ({ name })),
+    };
+    console.log('[Competitive Intel Lite] /api/competitive-intel request', payload);
+    const r = await fetch('/api/competitive-intel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const data = await r.json();
+    console.log('[Competitive Intel Lite] /api/competitive-intel response', data);
+    if (!r.ok || data.error) throw new Error(data.error || `Competitive Intel Lite failed with ${r.status}`);
+    return data;
+  } catch (e) {
+    console.error('[Competitive Intel Lite] error', e);
+    return { competitors: [], error: e.message };
+  }
+}
+
+async function reportBuilderAgent(brand, analysis, competitive, context, competitiveLite) {
+  const directionalIntel = competitiveLite?.competitors?.map(c => `${c.competitor}: ${c.synthesis}`).join('\n\n') || 'none';
   return await claude(
     `Final synthesizer for ${brand}.
 SUMMARY: ${analysis.executiveSummary}
 DRIVERS: ${analysis.spikeDrivers?.join(' | ')}
 THEMES: ${context.themes?.join(', ')}
 GROK SIGNALS: ${context.grokSignals?.substring(0, 400) || 'none'}
+BRAND24 VERIFIED COMPETITIVE METRICS: ${competitive?.sovData?.map(s => `${s.brand}: ${s.found ? `${s.percentage}% SOV from ${s.mentions} mentions` : 'no Brand24 project'}`).join(' | ') || 'none'}
+DIRECTIONAL COMPETITOR INTEL (AI-native sources, not audited Brand24 data): ${directionalIntel.substring(0, 1200)}
 Return valid JSON:
 {"positiveThemes":["specific theme with evidence","specific theme"],"negativeThemes":["specific theme with evidence","specific theme"],"scamRiskAlert":"1 sentence if fraud signals present, otherwise null","recommendations":["specific actionable rec tied to data","specific rec","specific rec"]}`,
     500,
@@ -251,7 +277,7 @@ const AGENTS = [
   { key: 'tracker',     name: '2 · Tracker',           role: 'Quantitative computation' },
   { key: 'context',     name: '3 · Context Scout',     role: 'Brand24 events + Grok X/Twitter' },
   { key: 'analyst',     name: '4 · Analyst',           role: 'Brand24 + Grok grounded' },
-  { key: 'competitive', name: '5 · Competitive Intel', role: 'SOV across Brand24 projects' },
+  { key: 'competitive', name: '5 · Competitive Intel', role: 'Brand24 SOV + AI-native Lite' },
   { key: 'reporter',    name: '6 · Report Builder',    role: 'Final synthesis' },
 ];
 const DETAILS = {
@@ -259,7 +285,7 @@ const DETAILS = {
   tracker:     'Computing metrics...',
   context:     'Brand24 events + Grok X/Twitter signals...',
   analyst:     'Synthesizing Brand24 + Grok intelligence...',
-  competitive: 'Brand24 SOV across all projects...',
+  competitive: 'Brand24 SOV + directional AI-native reads...',
   reporter:    'Assembling final report...',
 };
 const IDLE = { listener:'idle', tracker:'idle', context:'idle', analyst:'idle', competitive:'idle', reporter:'idle' };
@@ -391,7 +417,44 @@ function FloatingAskAI({ onClick }) {
   );
 }
 
-function composeReportContext({ brand, period, metrics, context, analysis, competitive, report }) {
+function DirectionalIntelLite({ competitiveLite }) {
+  const items = competitiveLite?.competitors || [];
+  if (!items.length && !competitiveLite?.error) return null;
+  return (
+    <div style={{ ...CARD, marginBottom:14, borderColor:'#1DA1F244' }}>
+      <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12, marginBottom:12 }}>
+        <div>
+          <div style={{ color:'#1DA1F2', fontSize:10, letterSpacing:'0.14em', textTransform:'uppercase', fontFamily:"'JetBrains Mono',monospace", marginBottom:4 }}>Directional Intelligence · AI-native sources</div>
+          <p style={{ color:'#777', fontSize:12, lineHeight:1.55, margin:0 }}>Grok, Perplexity, Gemini, and optional manual Meta AI notes. Not audited Brand24 mention data.</p>
+        </div>
+        <span style={{ background:'#1DA1F222', border:'1px solid #1DA1F244', borderRadius:10, padding:'3px 9px', fontSize:9, color:'#1DA1F2', whiteSpace:'nowrap', fontFamily:"'JetBrains Mono',monospace" }}>AI-NATIVE</span>
+      </div>
+      <ErrorMessage message={competitiveLite?.error}/>
+      {items.length > 0 && (
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(260px, 1fr))', gap:10 }}>
+          {items.map((item, i) => (
+            <div key={i} style={{ background:'#0d0d0d', border:'1px solid #1a1a1a', borderRadius:8, padding:'12px 14px' }}>
+              <div style={{ display:'flex', justifyContent:'space-between', gap:8, alignItems:'center', marginBottom:8 }}>
+                <div style={{ color:'#f0f0f0', fontSize:13, fontWeight:800 }}>{item.competitor}</div>
+                <span style={{ color:'#1DA1F2', fontSize:9, fontFamily:"'JetBrains Mono',monospace" }}>DIRECTIONAL</span>
+              </div>
+              <p style={{ color:'#b8bec8', fontSize:12, lineHeight:1.65, margin:'0 0 10px', whiteSpace:'pre-wrap' }}>{item.synthesis || 'No synthesis returned.'}</p>
+              <div style={{ display:'flex', flexWrap:'wrap', gap:5 }}>
+                {item.sources?.map(source => (
+                  <span key={source.source} title={source.themes} style={{ background:'#111', border:'1px solid #252525', borderRadius:999, color:'#777', padding:'3px 8px', fontSize:9 }}>
+                    {source.source.split(' ')[0]}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function composeReportContext({ brand, period, metrics, context, analysis, competitive, competitiveLite, report }) {
   return `
 Brand: ${brand}
 Period: ${period}
@@ -404,7 +467,9 @@ Spike drivers: ${analysis?.spikeDrivers?.join(' | ') || 'n/a'}
 Sentiment narrative: ${analysis?.sentimentNarrative || 'n/a'}
 Brand24 events: ${context?.events?.map(e => `${e.date}: ${e.description}`).join(' | ') || 'n/a'}
 Grok signals: ${context?.grokSignals?.substring(0, 1200) || 'n/a'}
-Share of voice: ${competitive?.sovData?.map(s => `${s.brand}: ${s.found ? `${s.percentage}% (${s.mentions})` : 'no project'}`).join(' | ') || 'n/a'}
+Verified Brand24 share of voice: ${competitive?.sovData?.map(s => `${s.brand}: ${s.found ? `${s.percentage}% (${s.mentions})` : 'no project'}`).join(' | ') || 'n/a'}
+Directional AI-native competitor intel: ${competitiveLite?.competitors?.map(c => `${c.competitor}: ${c.synthesis}`).join(' | ') || 'n/a'}
+Directional intel caveat: AI-native competitor reads are not audited Brand24 mention counts or reach figures.
 Recommendations: ${report?.recommendations?.join(' | ') || 'n/a'}
 `;
 }
@@ -463,21 +528,25 @@ export default function SignalIntel() {
       so('analysis', analysis); sa('analyst', 'done');
 
       sa('competitive', 'running');
-      const competitive = await competitiveIntelAgent(brand, competitors, startDate, endDate, context.grokSignals);
+      const [competitive, competitiveLite] = await Promise.all([
+        competitiveIntelAgent(brand, competitors, startDate, endDate, context.grokSignals),
+        competitiveIntelLiteAgent(competitors, period),
+      ]);
       so('competitive', competitive); sa('competitive', 'done');
+      so('competitiveLite', competitiveLite);
 
       sa('reporter', 'running');
-      const report = await reportBuilderAgent(brand, analysis, competitive, context);
+      const report = await reportBuilderAgent(brand, analysis, competitive, context, competitiveLite);
       so('report', report); sa('reporter', 'done');
 
       setTimeout(() => setStep('report'), 400);
     } catch(e) { setError('Pipeline error: ' + e.message); setStep('setup'); }
   };
 
-  const { metrics, context, analysis, competitive, report } = out;
+  const { metrics, context, analysis, competitive, competitiveLite, report } = out;
   const hasB24 = !!metrics?.found;
   const hasGrok = !!context?.grokSignals;
-  const reportContext = composeReportContext({ brand, period, metrics, context, analysis, competitive, report });
+  const reportContext = composeReportContext({ brand, period, metrics, context, analysis, competitive, competitiveLite, report });
 
   const askAI = async e => {
     e.preventDefault();
@@ -761,7 +830,7 @@ Return a concise intelligence summary, recurring themes, specific public posts o
 
         {/* SOV */}
         <div style={{ ...CARD, marginBottom:14 }}>
-          <div style={{ color:'#666', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:12 }}>Share of Voice · Brand24 Projects</div>
+          <div style={{ color:'#666', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:12 }}>Share of Voice · Verified Metrics (Brand24)</div>
           {competitive.sovData?.map((s,i) => <SOVRow key={i} {...s}/>)}
           {competitive.sovData?.some(s => !s.found) && (
             <div style={{ marginTop:12, padding:'10px 14px', background:'#0a0a0a', borderRadius:6, border:'1px solid #1e1e1e' }}>
@@ -771,6 +840,8 @@ Return a concise intelligence summary, recurring themes, specific public posts o
             </div>
           )}
         </div>
+
+        <DirectionalIntelLite competitiveLite={competitiveLite}/>
 
         {/* Competitor notes */}
         {competitive.competitorNotes?.length > 0 && (
