@@ -17,6 +17,7 @@ const XAI_API_KEY = process.env.XAI_API_KEY!;
 const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY!;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
 const GEMINI_MODEL = 'gemini-3.6-flash';
+const GEMINI_429_RETRIES = 2;
 
 interface CompetitorInput {
   name: string;
@@ -46,6 +47,10 @@ function sourceError(source: string, message: string): SourcePull {
     source,
     themes: `[${source} error: ${message}]`,
   };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function pullGrok(competitor: string, dateRange: string): Promise<SourcePull> {
@@ -122,40 +127,61 @@ async function pullGemini(competitor: string, dateRange: string): Promise<Source
   try {
     if (!GEMINI_API_KEY) return sourceError(source, 'GEMINI_API_KEY is not set');
 
-    const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [
+    const requestBody = JSON.stringify({
+      contents: [
+        {
+          parts: [
             {
-              parts: [
-                {
-                  text: `Search the web and YouTube for "${competitor}" (Philippine bank) mentions during ${dateRange}. Summarize top 3 themes and overall sentiment tone. Qualitative only, no invented numbers.`,
-                },
-              ],
+              text: `Search the web and YouTube for "${competitor}" (Philippine bank) mentions during ${dateRange}. Summarize top 3 themes and overall sentiment tone. Qualitative only, no invented numbers.`,
             },
           ],
-          tools: [{ google_search: {} }],
-        }),
-      }
-    );
-    const data = await readJsonResponse(res);
-    console.log('competitive-intel Gemini response', {
-      competitor,
-      model: GEMINI_MODEL,
-      status: res.status,
-      ok: res.ok,
-      candidates: Array.isArray(data?.candidates) ? data.candidates.length : 0,
-      error: data?.error,
+        },
+      ],
+      tools: [{ google_search: {} }],
     });
-    if (!res.ok) {
-      return sourceError(source, `HTTP ${res.status} ${res.statusText}: ${data?.error?.message || data?.error || data?.raw || 'unknown response'}`);
+
+    for (let attempt = 0; attempt <= GEMINI_429_RETRIES; attempt += 1) {
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: requestBody,
+        }
+      );
+      const data = await readJsonResponse(res);
+      console.log('competitive-intel Gemini response', {
+        competitor,
+        model: GEMINI_MODEL,
+        attempt: attempt + 1,
+        status: res.status,
+        ok: res.ok,
+        candidates: Array.isArray(data?.candidates) ? data.candidates.length : 0,
+        error: data?.error,
+      });
+
+      if (res.status === 429 && attempt < GEMINI_429_RETRIES) {
+        const waitMs = Math.round(1000 * 2 ** attempt + Math.random() * 500);
+        console.warn('competitive-intel Gemini rate limited; retrying', {
+          competitor,
+          model: GEMINI_MODEL,
+          attempt: attempt + 1,
+          nextAttempt: attempt + 2,
+          waitMs,
+        });
+        await sleep(waitMs);
+        continue;
+      }
+
+      if (!res.ok) {
+        return sourceError(source, `HTTP ${res.status} ${res.statusText}: ${data?.error?.message || data?.error || data?.raw || 'unknown response'}`);
+      }
+      const text = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+      if (!text.trim()) return sourceError(source, 'empty response text');
+      return { source, themes: text };
     }
-    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-    if (!text.trim()) return sourceError(source, 'empty response text');
-    return { source, themes: text };
+
+    return sourceError(source, 'rate limited after retry attempts');
   } catch (err: any) {
     console.error('competitive-intel Gemini error', { competitor, error: err?.message });
     return sourceError(source, err?.message || 'unknown failure');
