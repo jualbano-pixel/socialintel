@@ -30,24 +30,60 @@ interface SourcePull {
   themes: string;
 }
 
+async function readJsonResponse(res: Response): Promise<any> {
+  const raw = await res.text();
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return { raw };
+  }
+}
+
+function sourceError(source: string, message: string): SourcePull {
+  return {
+    source,
+    themes: `[${source} error: ${message}]`,
+  };
+}
+
 async function pullGrok(competitor: string, dateRange: string): Promise<SourcePull> {
-  const res = await fetch('https://api.x.ai/v1/responses', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${XAI_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: 'grok-4.3',
-      input: `Search X/Twitter for mentions of "${competitor}" (Philippine bank) during ${dateRange}. Summarize: top 3 themes/topics people are discussing, overall sentiment tone (positive/neutral/negative lean), and any notable spikes or viral moments. Do not invent numbers — describe qualitatively only.`,
-      tools: [{ type: 'x_search' }, { type: 'web_search' }],
-    }),
-  });
-  const data = await res.json();
-  // output[0] is the reasoning block, output[1] is the text response —
-  // same quirk noted in the main Signal Intel v3 handoff.
-  const text = data?.output?.[1]?.content?.[0]?.text ?? '';
-  return { source: 'Grok (X/Twitter)', themes: text };
+  const source = 'Grok (X/Twitter)';
+  try {
+    if (!XAI_API_KEY) return sourceError(source, 'XAI_API_KEY is not set');
+
+    const res = await fetch('https://api.x.ai/v1/responses', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${XAI_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: 'grok-4.3',
+        input: `Search X/Twitter for mentions of "${competitor}" (Philippine bank) during ${dateRange}. Summarize: top 3 themes/topics people are discussing, overall sentiment tone (positive/neutral/negative lean), and any notable spikes or viral moments. Do not invent numbers — describe qualitatively only.`,
+        tools: [{ type: 'x_search' }, { type: 'web_search' }],
+      }),
+    });
+    const data = await readJsonResponse(res);
+    console.log('competitive-intel Grok response', {
+      competitor,
+      status: res.status,
+      ok: res.ok,
+      outputBlocks: Array.isArray(data?.output) ? data.output.length : 0,
+      error: data?.error,
+    });
+    if (!res.ok) {
+      return sourceError(source, `HTTP ${res.status} ${res.statusText}: ${data?.error?.message || data?.error || data?.raw || 'unknown response'}`);
+    }
+    // output[0] is the reasoning block, output[1] is the text response —
+    // same quirk noted in the main Signal Intel v3 handoff.
+    const text = data?.output?.[1]?.content?.[0]?.text ?? '';
+    if (!text.trim()) return sourceError(source, 'empty response text');
+    return { source, themes: text };
+  } catch (err: any) {
+    console.error('competitive-intel Grok error', { competitor, error: err?.message });
+    return sourceError(source, err?.message || 'unknown failure');
+  }
 }
 
 async function pullPerplexity(competitor: string, dateRange: string): Promise<SourcePull> {
@@ -81,28 +117,47 @@ async function pullPerplexity(competitor: string, dateRange: string): Promise<So
 }
 
 async function pullGemini(competitor: string, dateRange: string): Promise<SourcePull> {
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [
-          {
-            parts: [
-              {
-                text: `Search the web and YouTube for "${competitor}" (Philippine bank) mentions during ${dateRange}. Summarize top 3 themes and overall sentiment tone. Qualitative only, no invented numbers.`,
-              },
-            ],
-          },
-        ],
-        tools: [{ google_search: {} }],
-      }),
+  const source = 'Gemini (Google web/YouTube)';
+  try {
+    if (!GEMINI_API_KEY) return sourceError(source, 'GEMINI_API_KEY is not set');
+
+    const res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [
+            {
+              parts: [
+                {
+                  text: `Search the web and YouTube for "${competitor}" (Philippine bank) mentions during ${dateRange}. Summarize top 3 themes and overall sentiment tone. Qualitative only, no invented numbers.`,
+                },
+              ],
+            },
+          ],
+          tools: [{ google_search: {} }],
+        }),
+      }
+    );
+    const data = await readJsonResponse(res);
+    console.log('competitive-intel Gemini response', {
+      competitor,
+      status: res.status,
+      ok: res.ok,
+      candidates: Array.isArray(data?.candidates) ? data.candidates.length : 0,
+      error: data?.error,
+    });
+    if (!res.ok) {
+      return sourceError(source, `HTTP ${res.status} ${res.statusText}: ${data?.error?.message || data?.error || data?.raw || 'unknown response'}`);
     }
-  );
-  const data = await res.json();
-  const text = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-  return { source: 'Gemini (Google web/YouTube)', themes: text };
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
+    if (!text.trim()) return sourceError(source, 'empty response text');
+    return { source, themes: text };
+  } catch (err: any) {
+    console.error('competitive-intel Gemini error', { competitor, error: err?.message });
+    return sourceError(source, err?.message || 'unknown failure');
+  }
 }
 
 function pullMetaAI(manualNotes?: string): SourcePull {
