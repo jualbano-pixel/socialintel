@@ -30,9 +30,22 @@ export async function POST(request) {
       }),
     });
     const data = await response.json();
-    console.log('Claude+B24 content types:', data.content?.map(b => b.type).join(', ') || data.error?.message);
-    return Response.json(data);
+    console.log('Claude+B24 response', {
+      status: response.status,
+      ok: response.ok,
+      error: data.error?.message,
+      content: data.content?.map(b => ({
+        type: b.type,
+        name: b.name,
+        serverName: b.server_name,
+        toolName: b.tool_name,
+        status: b.status,
+        error: b.error?.message || b.error,
+      })),
+    });
+    return Response.json(data, { status: response.status });
   } catch (e) {
+    console.error('Claude+B24 route error:', e);
     return Response.json({ error: e.message }, { status: 500 });
   }
 }

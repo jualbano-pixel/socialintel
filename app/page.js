@@ -79,9 +79,17 @@ async function claudeText(prompt, maxTokens = 700, label = 'Ask AI') {
 
 async function claudeB24(prompt, maxTokens = 1500) {
   try {
+    console.log('[Claude+B24] /api/claude-b24 request', { maxTokens, promptPreview: prompt.substring(0, 240) });
     const r = await fetch('/api/claude-b24', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: CLAUDE_MODEL, max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] }) });
     const data = await r.json();
+    console.log('[Claude+B24] /api/claude-b24 response', {
+      status: r.status,
+      ok: r.ok,
+      error: data.error?.message || data.error,
+      contentTypes: data.content?.map(b => b.type),
+    });
+    if (!r.ok || data.error) throw new Error(data.error?.message || data.error || `Claude+B24 request failed with ${r.status}`);
     return data.content?.filter(b => b.type === 'text').map(b => b.text).join('') ?? '';
   } catch(e) { console.warn('Claude+B24:', e.message); return ''; }
 }
@@ -163,10 +171,14 @@ async function listenerAgent(brand, startDate, endDate, geoFilter = [], langFilt
   });
   const text = await claudeB24(
     `You have Brand24 social listening tools.
-1. List all projects using brand24_get_projects
-2. Find project matching "${brand}" (case-insensitive, partial match OK)
+1. Always call brand24_get_projects during this request. Do not use any cached, remembered, hardcoded, or previously seen project ID.
+2. Find the current Brand24 project matching "${brand}" (case-insensitive, partial match OK), and resolve its numeric projectId from brand24_get_projects.
+   - If multiple projects match "${brand}", return matchingProjectCandidates with their projectName/projectId values.
+   - Select the exact-name match when available.
+   - If duplicate exact-name projects exist and creation/update metadata is unavailable, select the highest numeric projectId because a newer Netflix project may have been created after an older one.
+   - If you cannot resolve a numeric projectId, do not continue to topics_overview. Return found=false with listenerError.
 3. Do NOT use brand24_project_stats for headline totals because it cannot accept country/language filters.
-4. Use brand24_topics_overview for the matching project from ${startDate} to ${endDate}.
+4. Use brand24_topics_overview for the selected numeric projectId from ${startDate} to ${endDate}. Do not pass a project name to topics_overview if the tool expects projectId.
 5. Pass this filters object in the tool call: ${filtersBlock}
    - ctr is ISO 3166-1 alpha-2 country code array. Empty array means no country restriction.
    - lang is ISO 639-1 language code array. Empty array means no language restriction.
@@ -180,15 +192,49 @@ async function listenerAgent(brand, startDate, endDate, geoFilter = [], langFilt
 Known limitation: topics_overview can return a limited set of detected topics. Some filtered mentions may not map cleanly to a returned topic, so totals can slightly undercount the exact Brand24 dashboard. This is expected. It should still be close to the filtered dashboard order of magnitude, not global all-language totals.
 
 Return ONLY valid JSON:
-If found: {"found":true,"projectName":"...","projectId":123,"totalMentions":0,"totalReach":0,"positiveMentions":0,"negativeMentions":0,"neutralMentions":0,"dailyStats":[],"periodDays":${periodDays},"filtersApplied":{"ctr":${JSON.stringify(geoFilter)},"lang":${JSON.stringify(langFilter)}},"topicsReturned":0,"topicsLimit":0,"topicsOverviewCaveat":"topics_overview sums may slightly undercount exact filtered dashboard totals due to returned-topic limits"}
-If not found: {"found":false,"searchedFor":"${brand}","availableProjects":["p1","p2"]}`
+If found: {"found":true,"projectName":"...","projectId":123,"projectIdSource":"brand24_get_projects current request","matchingProjectCandidates":[{"projectName":"...","projectId":123}],"totalMentions":0,"totalReach":0,"positiveMentions":0,"negativeMentions":0,"neutralMentions":0,"dailyStats":[],"periodDays":${periodDays},"filtersApplied":{"ctr":${JSON.stringify(geoFilter)},"lang":${JSON.stringify(langFilter)}},"topicsOverviewStatus":"ok","topicsOverviewError":null,"topicsReturned":0,"topicsLimit":0,"topicsOverviewCaveat":"topics_overview sums may slightly undercount exact filtered dashboard totals due to returned-topic limits"}
+If topics_overview fails: {"found":false,"searchedFor":"${brand}","projectName":"...","projectId":123,"projectIdSource":"brand24_get_projects current request","matchingProjectCandidates":[{"projectName":"...","projectId":123}],"totalMentions":0,"totalReach":0,"positiveMentions":0,"negativeMentions":0,"neutralMentions":0,"dailyStats":[],"periodDays":${periodDays},"filtersApplied":{"ctr":${JSON.stringify(geoFilter)},"lang":${JSON.stringify(langFilter)}},"topicsOverviewStatus":"error","topicsOverviewError":"actual status/error message from brand24_topics_overview","topicsReturned":0,"topicsLimit":0,"listenerError":"brand24_topics_overview failed: actual status/error message"}
+If not found: {"found":false,"searchedFor":"${brand}","availableProjects":["p1","p2"],"matchingProjectCandidates":[],"listenerError":"No matching Brand24 project found"}`
   );
-  const data = parseJSON(text, { found: false, searchedFor: brand, totalMentions: 0, totalReach: 0, positiveMentions: 0, negativeMentions: 0, neutralMentions: 0, dailyStats: [] });
-  return {
+  const fallback = {
+    found: false,
+    searchedFor: brand,
+    totalMentions: 0,
+    totalReach: 0,
+    positiveMentions: 0,
+    negativeMentions: 0,
+    neutralMentions: 0,
+    dailyStats: [],
+    listenerError: text ? 'Listener did not return valid JSON from Brand24 MCP' : 'Listener returned no text from Claude+B24',
+    topicsOverviewStatus: 'error',
+    topicsOverviewError: text ? 'Invalid Listener JSON' : 'Empty Claude+B24 response',
+  };
+  const data = parseJSON(text, fallback);
+  const normalized = {
     ...data,
     periodDays: data.periodDays || periodDays,
     filtersApplied: data.filtersApplied || { ctr: geoFilter, lang: langFilter },
   };
+  if (normalized.found && typeof normalized.projectId !== 'number') {
+    normalized.listenerError = 'Listener did not resolve a numeric projectId from brand24_get_projects';
+    normalized.topicsOverviewStatus = normalized.topicsOverviewStatus || 'error';
+  }
+  if (normalized.topicsOverviewStatus === 'error' && !normalized.listenerError) {
+    normalized.listenerError = `brand24_topics_overview failed: ${normalized.topicsOverviewError || 'unknown error'}`;
+  }
+  console.log('[Listener] Brand24 topics_overview diagnostics', {
+    brand,
+    projectId: normalized.projectId,
+    projectName: normalized.projectName,
+    projectIdSource: normalized.projectIdSource,
+    filtersApplied: normalized.filtersApplied,
+    topicsOverviewStatus: normalized.topicsOverviewStatus,
+    topicsOverviewError: normalized.topicsOverviewError,
+    topicsReturned: normalized.topicsReturned,
+    topicsLimit: normalized.topicsLimit,
+    totalMentions: normalized.totalMentions,
+  });
+  return normalized;
 }
 
 function trackerAgent(d) {
@@ -206,7 +252,9 @@ function trackerAgent(d) {
       neutral: { count: neu, pct: parseFloat((neu/totS*100).toFixed(1)) },
     },
     dailyStats: d.dailyStats || [], found: d.found, projectName: d.projectName,
-    filtersApplied: d.filtersApplied, topicsReturned: d.topicsReturned, topicsLimit: d.topicsLimit,
+    projectId: d.projectId, projectIdSource: d.projectIdSource,
+    filtersApplied: d.filtersApplied, topicsOverviewStatus: d.topicsOverviewStatus, topicsOverviewError: d.topicsOverviewError,
+    topicsReturned: d.topicsReturned, topicsLimit: d.topicsLimit, listenerError: d.listenerError,
   };
 }
 
@@ -806,6 +854,15 @@ Return a concise intelligence summary, recurring themes, specific public posts o
         <IntelligenceQuery query={query} setQuery={setQuery} loading={queryLoading} result={queryResult} error={queryError} open={queryOpen} setOpen={setQueryOpen} onSubmit={runTopicQuery}/>
 
         {/* Metrics */}
+        {metrics.listenerError && (
+          <div style={{ background:'#1a0000', border:'1px solid #ff444433', borderRadius:10, color:'#ff8a8a', fontSize:12, lineHeight:1.6, padding:'12px 16px', marginBottom:14 }}>
+            <div style={{ color:'#ffb0b0', fontSize:10, letterSpacing:'0.14em', textTransform:'uppercase', fontFamily:"'JetBrains Mono',monospace", marginBottom:4 }}>Listener · Brand24 topics_overview error</div>
+            <div>{metrics.listenerError}</div>
+            <div style={{ color:'#a66666', marginTop:6, fontFamily:"'JetBrains Mono',monospace" }}>
+              status: {metrics.topicsOverviewStatus || 'unknown'} · projectId: {metrics.projectId || 'unresolved'} · topics: {metrics.topicsReturned ?? 0}{metrics.topicsLimit ? `/${metrics.topicsLimit}` : ''}
+            </div>
+          </div>
+        )}
         <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, marginBottom:14 }}>
           <Metric label="Total Mentions" value={fmt(metrics.mentions.total)} sub={hasB24?`Brand24 live · ${formatListenerScope(metrics.filtersApplied)}`:'No Brand24 project'}/>
           <Metric label="Total Reach" value={fmt(metrics.totalReach)} sub="30-day period"/>
