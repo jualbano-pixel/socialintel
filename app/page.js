@@ -127,25 +127,68 @@ const getMockSov = (brand, comps) => [
   ...comps.map(c => ({ brand: c, mentions: 0, percentage: 0, isClient: false, found: false }))
 ];
 
+function daysBetweenInclusive(startDate, endDate) {
+  const start = new Date(`${startDate}T00:00:00Z`);
+  const end = new Date(`${endDate}T00:00:00Z`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 1;
+  return Math.max(1, Math.round((end - start) / 86400000) + 1);
+}
+
+function getListenerFilters(brand) {
+  if (brand.trim().toLowerCase().includes('netflix')) {
+    return { geoFilter: ['PH'], langFilter: ['en', 'tl'] };
+  }
+  return { geoFilter: [], langFilter: [] };
+}
+
+function formatListenerScope(filtersApplied) {
+  const ctr = filtersApplied?.ctr || [];
+  const lang = filtersApplied?.lang || [];
+  const country = ctr.length ? `Country: ${ctr.join(', ')}` : 'Country: global';
+  const language = lang.length ? `Language: ${lang.join(', ')}` : 'Language: all';
+  return `${country} · ${language}`;
+}
+
 // ══════════════════════════════════════════════════════════════
 // 6-AGENT PIPELINE
 // 1·Listener(B24) → 2·Tracker → 3·Context Scout(B24+Grok)
 // → 4·Analyst → 5·Competitive(B24) → 6·Report Builder
 // ══════════════════════════════════════════════════════════════
 
-async function listenerAgent(brand, startDate, endDate) {
+async function listenerAgent(brand, startDate, endDate, geoFilter = [], langFilter = []) {
+  const periodDays = daysBetweenInclusive(startDate, endDate);
+  const filtersBlock = JSON.stringify({
+    ctr: geoFilter,
+    lang: langFilter,
+  });
   const text = await claudeB24(
     `You have Brand24 social listening tools.
 1. List all projects using brand24_get_projects
 2. Find project matching "${brand}" (case-insensitive, partial match OK)
-3. Get stats from ${startDate} to ${endDate} using brand24_project_stats with response_format="json"
-4. Sum daily mentionsCount→totalMentions, reach→totalReach, positiveMentions, negativeMentions
+3. Do NOT use brand24_project_stats for headline totals because it cannot accept country/language filters.
+4. Use brand24_topics_overview for the matching project from ${startDate} to ${endDate}.
+5. Pass this filters object in the tool call: ${filtersBlock}
+   - ctr is ISO 3166-1 alpha-2 country code array. Empty array means no country restriction.
+   - lang is ISO 639-1 language code array. Empty array means no language restriction.
+6. Sum across topics_overview.overview:
+   - totalMentions = sum of topic mentions
+   - totalReach = sum of topic reach
+   - positiveMentions = sum of topic sentiment.positive
+   - neutralMentions = sum of topic sentiment.neutral
+   - negativeMentions = sum of topic sentiment.negative
+
+Known limitation: topics_overview can return a limited set of detected topics. Some filtered mentions may not map cleanly to a returned topic, so totals can slightly undercount the exact Brand24 dashboard. This is expected. It should still be close to the filtered dashboard order of magnitude, not global all-language totals.
 
 Return ONLY valid JSON:
-If found: {"found":true,"projectName":"...","projectId":123,"totalMentions":0,"totalReach":0,"positiveMentions":0,"negativeMentions":0,"neutralMentions":0,"dailyStats":[{"date":"2026-06-22","mentions":0,"reach":0}]}
+If found: {"found":true,"projectName":"...","projectId":123,"totalMentions":0,"totalReach":0,"positiveMentions":0,"negativeMentions":0,"neutralMentions":0,"dailyStats":[],"periodDays":${periodDays},"filtersApplied":{"ctr":${JSON.stringify(geoFilter)},"lang":${JSON.stringify(langFilter)}},"topicsReturned":0,"topicsLimit":0,"topicsOverviewCaveat":"topics_overview sums may slightly undercount exact filtered dashboard totals due to returned-topic limits"}
 If not found: {"found":false,"searchedFor":"${brand}","availableProjects":["p1","p2"]}`
   );
-  return parseJSON(text, { found: false, searchedFor: brand, totalMentions: 0, totalReach: 0, positiveMentions: 0, negativeMentions: 0, neutralMentions: 0, dailyStats: [] });
+  const data = parseJSON(text, { found: false, searchedFor: brand, totalMentions: 0, totalReach: 0, positiveMentions: 0, negativeMentions: 0, neutralMentions: 0, dailyStats: [] });
+  return {
+    ...data,
+    periodDays: data.periodDays || periodDays,
+    filtersApplied: data.filtersApplied || { ctr: geoFilter, lang: langFilter },
+  };
 }
 
 function trackerAgent(d) {
@@ -153,7 +196,7 @@ function trackerAgent(d) {
   const pos = d.positiveMentions || 0, neg = d.negativeMentions || 0;
   const neu = d.neutralMentions || (tot - pos - neg > 0 ? tot - pos - neg : 0);
   const totS = pos + neg + neu || 1;
-  const days = Math.max(d.dailyStats?.length || 1, 1);
+  const days = Math.max(d.periodDays || d.dailyStats?.length || 1, 1);
   return {
     mentions: { total: tot, dailyAvg: Math.round(tot / days) },
     totalReach: reach,
@@ -163,6 +206,7 @@ function trackerAgent(d) {
       neutral: { count: neu, pct: parseFloat((neu/totS*100).toFixed(1)) },
     },
     dailyStats: d.dailyStats || [], found: d.found, projectName: d.projectName,
+    filtersApplied: d.filtersApplied, topicsReturned: d.topicsReturned, topicsLimit: d.topicsLimit,
   };
 }
 
@@ -197,6 +241,8 @@ TOP TOPICS: ${context.topTopics?.map(t => `${t.name}(${t.mentions})`).join(', ')
   return await claude(
     `Senior social media analyst, Philippine agency. Analyze ${brand} (${period}).
 METRICS: Mentions ${metrics.mentions.total} | Reach ${fmt(metrics.totalReach)} | ${metrics.sentiment.positive.pct}% pos / ${metrics.sentiment.negative.pct}% neg / ${metrics.sentiment.neutral.pct}% neu
+BRAND24 LISTENER SCOPE: ${formatListenerScope(metrics.filtersApplied)}
+If Brand24 listener scope is global/unfiltered, do not describe Brand24 totals as Philippines-only. If it is country-filtered to PH, you may describe the Brand24 totals as Philippines-filtered.
 ${b24Block}
 ${grokBlock}
 Return valid JSON — name specific events from Brand24 and Grok:
@@ -465,6 +511,8 @@ Sentiment: ${metrics?.sentiment?.positive?.pct ?? 0}% positive, ${metrics?.senti
 Executive summary: ${analysis?.executiveSummary || 'n/a'}
 Spike drivers: ${analysis?.spikeDrivers?.join(' | ') || 'n/a'}
 Sentiment narrative: ${analysis?.sentimentNarrative || 'n/a'}
+Brand24 listener scope: ${formatListenerScope(metrics?.filtersApplied)}
+Brand24 topics caveat: ${metrics?.topicsLimit ? `topics_overview returned ${metrics?.topicsReturned ?? 'unknown'} topics with limit ${metrics.topicsLimit}; headline sums may slightly undercount exact filtered dashboard totals` : 'n/a'}
 Brand24 events: ${context?.events?.map(e => `${e.date}: ${e.description}`).join(' | ') || 'n/a'}
 Grok signals: ${context?.grokSignals?.substring(0, 1200) || 'n/a'}
 Verified Brand24 share of voice: ${competitive?.sovData?.map(s => `${s.brand}: ${s.found ? `${s.percentage}% (${s.mentions})` : 'no project'}`).join(' | ') || 'n/a'}
@@ -511,7 +559,8 @@ export default function SignalIntel() {
       const { startDate, endDate } = parsePeriod(period);
 
       sa('listener', 'running');
-      const listenerData = await listenerAgent(brand, startDate, endDate);
+      const { geoFilter, langFilter } = getListenerFilters(brand);
+      const listenerData = await listenerAgent(brand, startDate, endDate, geoFilter, langFilter);
       so('listenerData', listenerData); sa('listener', 'done');
 
       sa('tracker', 'running');
@@ -758,7 +807,7 @@ Return a concise intelligence summary, recurring themes, specific public posts o
 
         {/* Metrics */}
         <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, marginBottom:14 }}>
-          <Metric label="Total Mentions" value={fmt(metrics.mentions.total)} sub={hasB24?`Brand24 live · ${metrics.projectName||''}`:'No Brand24 project'}/>
+          <Metric label="Total Mentions" value={fmt(metrics.mentions.total)} sub={hasB24?`Brand24 live · ${formatListenerScope(metrics.filtersApplied)}`:'No Brand24 project'}/>
           <Metric label="Total Reach" value={fmt(metrics.totalReach)} sub="30-day period"/>
           <Metric label="Daily Avg" value={metrics.mentions.dailyAvg}/>
         </div>
