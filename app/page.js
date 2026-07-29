@@ -176,24 +176,23 @@ async function listenerAgent(brand, startDate, endDate, geoFilter = [], langFilt
    - If multiple projects match "${brand}", return matchingProjectCandidates with their projectName/projectId values.
    - Select the exact-name match when available.
    - If duplicate exact-name projects exist and creation/update metadata is unavailable, select the highest numeric projectId because a newer Netflix project may have been created after an older one.
-   - If you cannot resolve a numeric projectId, do not continue to topics_overview. Return found=false with listenerError.
+   - If you cannot resolve a numeric projectId, do not continue to project_sources. Return found=false with listenerError.
 3. Do NOT use brand24_project_stats for headline totals because it cannot accept country/language filters.
-4. Use brand24_topics_overview for the selected numeric projectId from ${startDate} to ${endDate}. Do not pass a project name to topics_overview if the tool expects projectId.
+4. Use brand24_project_sources with operationName="getProjectSourceCategories" for the selected numeric projectId from ${startDate} to ${endDate}. Do not pass a project name if the tool expects projectId.
 5. Pass this filters object in the tool call: ${filtersBlock}
    - ctr is ISO 3166-1 alpha-2 country code array. Empty array means no country restriction.
    - lang is ISO 639-1 language code array. Empty array means no language restriction.
-6. Sum across topics_overview.overview:
-   - totalMentions = sum of topic mentions
-   - totalReach = sum of topic reach
-   - positiveMentions = sum of topic sentiment.positive
-   - neutralMentions = sum of topic sentiment.neutral
-   - negativeMentions = sum of topic sentiment.negative
+6. Sum across the source category result:
+   - totalMentions = sum of source category count values
+7. Reach and sentiment are not available from getProjectSourceCategories. Optionally call brand24_topics_overview with the same projectId/date/filter as a secondary enrichment source ONLY for reach/sentiment/topic context.
+   - If topics_overview returns topics, sum topic reach and topic sentiment for totalReach/positiveMentions/neutralMentions/negativeMentions.
+   - If topics_overview returns zero topics but project_sources returns non-zero mentions, keep totalMentions from project_sources and return totalReach/sentiment as 0 with listenerWarning explaining that topic/sentiment enrichment was unavailable.
 
-Known limitation: topics_overview can return a limited set of detected topics. Some filtered mentions may not map cleanly to a returned topic, so totals can slightly undercount the exact Brand24 dashboard. This is expected. It should still be close to the filtered dashboard order of magnitude, not global all-language totals.
+Known limitation: topics_overview is Lab24 topic clustering, not a raw mention counter. Never use topics_overview alone for headline Total Mentions. A zero-topic result can mean no clusters formed, not no mentions. project_sources getProjectSourceCategories is the authoritative filtered headline mention source.
 
 Return ONLY valid JSON:
-If found: {"found":true,"projectName":"...","projectId":123,"projectIdSource":"brand24_get_projects current request","matchingProjectCandidates":[{"projectName":"...","projectId":123}],"totalMentions":0,"totalReach":0,"positiveMentions":0,"negativeMentions":0,"neutralMentions":0,"dailyStats":[],"periodDays":${periodDays},"filtersApplied":{"ctr":${JSON.stringify(geoFilter)},"lang":${JSON.stringify(langFilter)}},"topicsOverviewStatus":"ok","topicsOverviewError":null,"topicsReturned":0,"topicsLimit":0,"topicsOverviewCaveat":"topics_overview sums may slightly undercount exact filtered dashboard totals due to returned-topic limits"}
-If topics_overview fails: {"found":false,"searchedFor":"${brand}","projectName":"...","projectId":123,"projectIdSource":"brand24_get_projects current request","matchingProjectCandidates":[{"projectName":"...","projectId":123}],"totalMentions":0,"totalReach":0,"positiveMentions":0,"negativeMentions":0,"neutralMentions":0,"dailyStats":[],"periodDays":${periodDays},"filtersApplied":{"ctr":${JSON.stringify(geoFilter)},"lang":${JSON.stringify(langFilter)}},"topicsOverviewStatus":"error","topicsOverviewError":"actual status/error message from brand24_topics_overview","topicsReturned":0,"topicsLimit":0,"listenerError":"brand24_topics_overview failed: actual status/error message"}
+If found: {"found":true,"projectName":"...","projectId":123,"projectIdSource":"brand24_get_projects current request","matchingProjectCandidates":[{"projectName":"...","projectId":123}],"totalMentions":0,"totalReach":0,"positiveMentions":0,"negativeMentions":0,"neutralMentions":0,"dailyStats":[],"periodDays":${periodDays},"filtersApplied":{"ctr":${JSON.stringify(geoFilter)},"lang":${JSON.stringify(langFilter)}},"sourceCategoriesStatus":"ok","sourceCategoriesError":null,"sourceCategoriesReturned":0,"sourceCategories":[{"name":"News","count":0}],"topicsOverviewStatus":"ok","topicsOverviewError":null,"topicsReturned":0,"topicsLimit":0,"listenerWarning":"optional warning when source categories show mentions but topic/reach/sentiment enrichment was unavailable"}
+If project_sources fails: {"found":false,"searchedFor":"${brand}","projectName":"...","projectId":123,"projectIdSource":"brand24_get_projects current request","matchingProjectCandidates":[{"projectName":"...","projectId":123}],"totalMentions":0,"totalReach":0,"positiveMentions":0,"negativeMentions":0,"neutralMentions":0,"dailyStats":[],"periodDays":${periodDays},"filtersApplied":{"ctr":${JSON.stringify(geoFilter)},"lang":${JSON.stringify(langFilter)}},"sourceCategoriesStatus":"error","sourceCategoriesError":"actual status/error message from brand24_project_sources getProjectSourceCategories","sourceCategoriesReturned":0,"topicsOverviewStatus":"not_run","topicsOverviewError":null,"topicsReturned":0,"topicsLimit":0,"listenerError":"brand24_project_sources getProjectSourceCategories failed: actual status/error message"}
 If not found: {"found":false,"searchedFor":"${brand}","availableProjects":["p1","p2"],"matchingProjectCandidates":[],"listenerError":"No matching Brand24 project found"}`
   );
   const fallback = {
@@ -206,8 +205,8 @@ If not found: {"found":false,"searchedFor":"${brand}","availableProjects":["p1",
     neutralMentions: 0,
     dailyStats: [],
     listenerError: text ? 'Listener did not return valid JSON from Brand24 MCP' : 'Listener returned no text from Claude+B24',
-    topicsOverviewStatus: 'error',
-    topicsOverviewError: text ? 'Invalid Listener JSON' : 'Empty Claude+B24 response',
+    sourceCategoriesStatus: 'error',
+    sourceCategoriesError: text ? 'Invalid Listener JSON' : 'Empty Claude+B24 response',
   };
   const data = parseJSON(text, fallback);
   const normalized = {
@@ -219,15 +218,21 @@ If not found: {"found":false,"searchedFor":"${brand}","availableProjects":["p1",
     normalized.listenerError = 'Listener did not resolve a numeric projectId from brand24_get_projects';
     normalized.topicsOverviewStatus = normalized.topicsOverviewStatus || 'error';
   }
-  if (normalized.topicsOverviewStatus === 'error' && !normalized.listenerError) {
-    normalized.listenerError = `brand24_topics_overview failed: ${normalized.topicsOverviewError || 'unknown error'}`;
+  if (normalized.sourceCategoriesStatus === 'error' && !normalized.listenerError) {
+    normalized.listenerError = `brand24_project_sources getProjectSourceCategories failed: ${normalized.sourceCategoriesError || 'unknown error'}`;
   }
-  console.log('[Listener] Brand24 topics_overview diagnostics', {
+  if (normalized.found && normalized.totalMentions === 0 && normalized.sourceCategoriesStatus !== 'error' && !normalized.listenerError) {
+    normalized.listenerError = 'brand24_project_sources returned zero filtered mentions; verify projectId and filters against the Brand24 dashboard';
+  }
+  console.log('[Listener] Brand24 source categories diagnostics', {
     brand,
     projectId: normalized.projectId,
     projectName: normalized.projectName,
     projectIdSource: normalized.projectIdSource,
     filtersApplied: normalized.filtersApplied,
+    sourceCategoriesStatus: normalized.sourceCategoriesStatus,
+    sourceCategoriesError: normalized.sourceCategoriesError,
+    sourceCategoriesReturned: normalized.sourceCategoriesReturned,
     topicsOverviewStatus: normalized.topicsOverviewStatus,
     topicsOverviewError: normalized.topicsOverviewError,
     topicsReturned: normalized.topicsReturned,
@@ -253,8 +258,11 @@ function trackerAgent(d) {
     },
     dailyStats: d.dailyStats || [], found: d.found, projectName: d.projectName,
     projectId: d.projectId, projectIdSource: d.projectIdSource,
-    filtersApplied: d.filtersApplied, topicsOverviewStatus: d.topicsOverviewStatus, topicsOverviewError: d.topicsOverviewError,
-    topicsReturned: d.topicsReturned, topicsLimit: d.topicsLimit, listenerError: d.listenerError,
+    filtersApplied: d.filtersApplied,
+    sourceCategoriesStatus: d.sourceCategoriesStatus, sourceCategoriesError: d.sourceCategoriesError,
+    sourceCategoriesReturned: d.sourceCategoriesReturned, sourceCategories: d.sourceCategories,
+    topicsOverviewStatus: d.topicsOverviewStatus, topicsOverviewError: d.topicsOverviewError,
+    topicsReturned: d.topicsReturned, topicsLimit: d.topicsLimit, listenerError: d.listenerError, listenerWarning: d.listenerWarning,
   };
 }
 
@@ -305,19 +313,45 @@ Return valid JSON — name specific events from Brand24 and Grok:
   );
 }
 
-async function competitiveIntelAgent(brand, competitors, startDate, endDate, grokSignals) {
+function alignClientSovWithListener(competitive, brand, metrics) {
+  if (!competitive?.sovData?.length || !metrics) return competitive;
+  const clientMentions = metrics.mentions?.total ?? 0;
+  const sovData = competitive.sovData.map(row => (
+    row.isClient || row.brand?.trim().toLowerCase() === brand.trim().toLowerCase()
+      ? {
+          ...row,
+          mentions: clientMentions,
+          found: !!metrics.found,
+          source: 'Brand24 Listener filtered source categories',
+          consistencyNote: 'Client SOV row is aligned to the filtered Listener Total Mentions value.',
+        }
+      : row
+  ));
+  const total = sovData.reduce((sum, row) => sum + (row.found ? (row.mentions || 0) : 0), 0);
+  return {
+    ...competitive,
+    sovData: sovData.map(row => ({
+      ...row,
+      percentage: row.found && total ? parseFloat(((row.mentions || 0) / total * 100).toFixed(1)) : 0,
+    })),
+    sovConsistencyNote: `Client brand SOV uses filtered Listener total (${clientMentions}) so the same report does not show two different ${brand} mention totals.`,
+  };
+}
+
+async function competitiveIntelAgent(brand, competitors, startDate, endDate, grokSignals, listenerMetrics) {
   const text = await claudeB24(
     `You have Brand24 social listening tools.
 Get total mention counts from ${startDate} to ${endDate} for: ${[brand, ...competitors].join(', ')}
 For each: find Brand24 project, get stats using brand24_project_stats response_format="json", sum mentionsCount.
 Calculate SOV percentages. Brands without projects: found=false.
+IMPORTANT: For client brand "${brand}", do not invent or separately source a different headline mention count. The filtered Listener Total Mentions is ${listenerMetrics?.mentions?.total ?? 0}. The UI will align the client SOV row to this filtered Listener total.
 ${grokSignals ? `Grok competitor signals: ${grokSignals.substring(0, 400)}` : ''}
 Return ONLY valid JSON:
 {"sovData":[{"brand":"${brand}","mentions":1216,"percentage":35.7,"isClient":true,"found":true},{"brand":"${competitors[0] || 'BPI'}","mentions":0,"percentage":0,"isClient":false,"found":false}],"competitorNotes":[{"brand":"${competitors[0] || 'BPI'}","observation":"specific observation from Brand24 data or Grok signals"}]}`
   );
   const data = parseJSON(text, { sovData: getMockSov(brand, competitors), competitorNotes: [] });
   if (!data.sovData?.length) data.sovData = getMockSov(brand, competitors);
-  return data;
+  return alignClientSovWithListener(data, brand, listenerMetrics);
 }
 
 async function competitiveIntelLiteAgent(competitors, dateRange) {
@@ -560,7 +594,8 @@ Executive summary: ${analysis?.executiveSummary || 'n/a'}
 Spike drivers: ${analysis?.spikeDrivers?.join(' | ') || 'n/a'}
 Sentiment narrative: ${analysis?.sentimentNarrative || 'n/a'}
 Brand24 listener scope: ${formatListenerScope(metrics?.filtersApplied)}
-Brand24 topics caveat: ${metrics?.topicsLimit ? `topics_overview returned ${metrics?.topicsReturned ?? 'unknown'} topics with limit ${metrics.topicsLimit}; headline sums may slightly undercount exact filtered dashboard totals` : 'n/a'}
+Brand24 source categories: ${metrics?.sourceCategoriesReturned ?? 'n/a'} categories returned by filtered project_sources
+Brand24 enrichment caveat: ${metrics?.listenerWarning || (metrics?.topicsLimit ? `topics_overview returned ${metrics?.topicsReturned ?? 'unknown'} topics with limit ${metrics.topicsLimit}; reach/sentiment may be incomplete` : 'n/a')}
 Brand24 events: ${context?.events?.map(e => `${e.date}: ${e.description}`).join(' | ') || 'n/a'}
 Grok signals: ${context?.grokSignals?.substring(0, 1200) || 'n/a'}
 Verified Brand24 share of voice: ${competitive?.sovData?.map(s => `${s.brand}: ${s.found ? `${s.percentage}% (${s.mentions})` : 'no project'}`).join(' | ') || 'n/a'}
@@ -626,7 +661,7 @@ export default function SignalIntel() {
 
       sa('competitive', 'running');
       const [competitive, competitiveLite] = await Promise.all([
-        competitiveIntelAgent(brand, competitors, startDate, endDate, context.grokSignals),
+        competitiveIntelAgent(brand, competitors, startDate, endDate, context.grokSignals, metrics),
         competitiveIntelLiteAgent(competitors, period),
       ]);
       so('competitive', competitive); sa('competitive', 'done');
@@ -856,11 +891,17 @@ Return a concise intelligence summary, recurring themes, specific public posts o
         {/* Metrics */}
         {metrics.listenerError && (
           <div style={{ background:'#1a0000', border:'1px solid #ff444433', borderRadius:10, color:'#ff8a8a', fontSize:12, lineHeight:1.6, padding:'12px 16px', marginBottom:14 }}>
-            <div style={{ color:'#ffb0b0', fontSize:10, letterSpacing:'0.14em', textTransform:'uppercase', fontFamily:"'JetBrains Mono',monospace", marginBottom:4 }}>Listener · Brand24 topics_overview error</div>
+            <div style={{ color:'#ffb0b0', fontSize:10, letterSpacing:'0.14em', textTransform:'uppercase', fontFamily:"'JetBrains Mono',monospace", marginBottom:4 }}>Listener · Brand24 project_sources error</div>
             <div>{metrics.listenerError}</div>
             <div style={{ color:'#a66666', marginTop:6, fontFamily:"'JetBrains Mono',monospace" }}>
-              status: {metrics.topicsOverviewStatus || 'unknown'} · projectId: {metrics.projectId || 'unresolved'} · topics: {metrics.topicsReturned ?? 0}{metrics.topicsLimit ? `/${metrics.topicsLimit}` : ''}
+              status: {metrics.sourceCategoriesStatus || 'unknown'} · projectId: {metrics.projectId || 'unresolved'} · source categories: {metrics.sourceCategoriesReturned ?? 0}
             </div>
+          </div>
+        )}
+        {!metrics.listenerError && metrics.listenerWarning && (
+          <div style={{ background:'#1a1400', border:'1px solid #ffcc0040', borderRadius:10, color:'#d9b85f', fontSize:12, lineHeight:1.6, padding:'12px 16px', marginBottom:14 }}>
+            <div style={{ color:'#ffda75', fontSize:10, letterSpacing:'0.14em', textTransform:'uppercase', fontFamily:"'JetBrains Mono',monospace", marginBottom:4 }}>Listener · Brand24 enrichment warning</div>
+            <div>{metrics.listenerWarning}</div>
           </div>
         )}
         <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, marginBottom:14 }}>
