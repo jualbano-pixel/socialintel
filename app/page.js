@@ -689,6 +689,65 @@ function FloatingAskAI({ onClick }) {
   );
 }
 
+function SourceBadge({ label, active, note }) {
+  return (
+    <span title={note || label} style={{
+      display:'inline-flex',
+      alignItems:'center',
+      gap:4,
+      borderRadius:999,
+      padding:'3px 8px',
+      border:`1px solid ${active ? `${LIME}44` : '#333'}`,
+      background:active ? `${LIME}18` : '#151515',
+      color:active ? LIME : '#666',
+      fontSize:9,
+      fontFamily:"'JetBrains Mono',monospace",
+      letterSpacing:'0.08em',
+      textTransform:'uppercase',
+      whiteSpace:'nowrap',
+    }}>
+      {label}{!active ? '*' : ''}
+    </span>
+  );
+}
+
+function getSourceStatuses({ hasGrok, competitiveLite }) {
+  const sources = competitiveLite?.competitors?.flatMap(c => c.sources || []) || [];
+  const hasUsableSource = (name) => sources.some(source => {
+    const sourceName = String(source.source || '').toLowerCase();
+    const themes = String(source.themes || '').toLowerCase().trim();
+    return sourceName.includes(name) &&
+      themes &&
+      !themes.includes(' error:') &&
+      !themes.includes('api_key is not set') &&
+      !themes.includes('not wired yet') &&
+      !themes.includes('empty response text') &&
+      !themes.includes('no manual');
+  });
+  return {
+    claude: { active: true, note: 'Claude synthesis engine active' },
+    grok: { active: !!hasGrok || hasUsableSource('grok'), note: (hasGrok || hasUsableSource('grok')) ? 'Grok live search returned signal' : 'Grok did not return usable signal for this run' },
+    gemini: { active: hasUsableSource('gemini'), note: hasUsableSource('gemini') ? 'Google AI Gemini returned usable Competitive Intel Lite output' : 'Google AI Gemini wired; waiting for usable output in this run' },
+    perplexity: { active: hasUsableSource('perplexity'), note: hasUsableSource('perplexity') ? 'Perplexity returned usable Competitive Intel Lite output' : 'Perplexity queued: API key pending' },
+    meta: { active: false, note: 'Meta AI is manual-pull only; no PH API access yet' },
+  };
+}
+
+function SourceAttribution({ hasB24, hasGrok, competitiveLite }) {
+  const statuses = getSourceStatuses({ hasGrok, competitiveLite });
+  return (
+    <div style={{ display:'flex', flexWrap:'wrap', gap:5, alignItems:'center', marginTop:7 }}>
+      <SourceBadge label={hasB24 ? 'Brand24 Live' : 'Brand24 Demo'} active={hasB24} note={hasB24 ? 'Verified Metrics from Brand24' : 'Brand24 project not live for this run'} />
+      <SourceBadge label="Claude" active={statuses.claude.active} note={statuses.claude.note} />
+      <SourceBadge label="Grok" active={statuses.grok.active} note={statuses.grok.note} />
+      <SourceBadge label="Google AI" active={statuses.gemini.active} note={statuses.gemini.note} />
+      <SourceBadge label="Perplexity" active={statuses.perplexity.active} note={statuses.perplexity.note} />
+      <SourceBadge label="Meta AI" active={statuses.meta.active} note={statuses.meta.note} />
+      <span style={{ color:'#555', fontSize:9, fontFamily:"'JetBrains Mono',monospace" }}>*wired / pending / manual</span>
+    </div>
+  );
+}
+
 function DirectionalIntelLite({ competitiveLite }) {
   const items = competitiveLite?.competitors || [];
   if (!items.length && !competitiveLite?.error) return null;
@@ -1064,8 +1123,9 @@ Return a concise intelligence summary, recurring themes, specific public posts o
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:26, paddingBottom:18, borderBottom:'1px solid #181818' }}>
           <div>
             <div style={{ color:LIME, fontFamily:"'JetBrains Mono',monospace", fontSize:10, letterSpacing:'0.18em', marginBottom:6 }}>
-              SOCIAL MONITORING REPORT · {hasB24?'BRAND24 LIVE':'DEMO'}{hasGrok?' · GROK ✓':''} · 6 AGENTS
+              SOCIAL MONITORING REPORT · 6 AGENTS
             </div>
+            <SourceAttribution hasB24={hasB24} hasGrok={hasGrok} competitiveLite={competitiveLite} />
             <h1 style={{ fontFamily:"'Barlow Condensed',sans-serif", fontSize:36, fontWeight:700, margin:'0 0 4px' }}>{brand}</h1>
             <p style={{ color:'#555', fontSize:13, margin:0 }}>{period} · Prepared by Praxis Experiential</p>
           </div>
