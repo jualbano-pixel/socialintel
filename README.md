@@ -50,7 +50,7 @@ npm run dev
 ```
 
 ## Pipeline order
-1. **Listener** — Claude + Brand24 MCP → filtered project_sources headline mentions
+1. **Listener** — Claude + Brand24 MCP → raw mention country filter for geo-scoped reports
 2. **Tracker** — Pure computation (daily averages, sentiment %)
 3. **Context Scout** — Brand24 events + semantic search + Grok X/Twitter (runs BEFORE Analyst)
 4. **Analyst** — Claude synthesis grounded in Brand24 + Grok data

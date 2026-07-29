@@ -157,6 +157,24 @@ function formatListenerScope(filtersApplied) {
   return `${country} · ${language}`;
 }
 
+function mentionMetricSub(metrics, hasB24) {
+  if (!hasB24) return 'No Brand24 project';
+  if (metrics.clientSideCountryFilter) {
+    const country = metrics.filtersApplied?.ctr?.join(', ') || 'country';
+    return `${country}-confirmed raw sample · ${metrics.unknownCountryCount ?? 0} location unknown`;
+  }
+  return `Brand24 live · ${formatListenerScope(metrics.filtersApplied)}`;
+}
+
+function reachMetricSub(metrics) {
+  if (metrics.clientSideCountryFilter) {
+    return metrics.reachSource
+      ? `Sample ${metrics.reachSource} sum`
+      : 'No exact reach field in raw mentions';
+  }
+  return '30-day period';
+}
+
 // ══════════════════════════════════════════════════════════════
 // 6-AGENT PIPELINE
 // 1·Listener(B24) → 2·Tracker → 3·Context Scout(B24+Grok)
@@ -169,6 +187,7 @@ async function listenerAgent(brand, startDate, endDate, geoFilter = [], langFilt
     ctr: geoFilter,
     lang: langFilter,
   });
+  const hasGeoScope = geoFilter.length > 0;
   const text = await claudeB24(
     `You have Brand24 social listening tools.
 1. Always call brand24_get_projects during this request. Do not use any cached, remembered, hardcoded, or previously seen project ID.
@@ -179,20 +198,38 @@ async function listenerAgent(brand, startDate, endDate, geoFilter = [], langFilt
    - Preserve the matching project's totalMentions from brand24_get_projects as projectTotalUnfiltered for diagnostics only.
    - If you cannot resolve a numeric projectId, do not continue to project_sources. Return found=false with listenerError.
 3. Do NOT use brand24_project_stats for headline totals because it cannot accept country/language filters.
-4. Use brand24_project_sources with operationName="getProjectSourceCategories" for the selected numeric projectId from ${startDate} to ${endDate}. Do not pass a project name if the tool expects projectId.
-5. Pass this filters object in the tool call: ${filtersBlock}
+4. Country/language filters object requested by the UI: ${filtersBlock}
    - ctr is ISO 3166-1 alpha-2 country code array. Empty array means no country restriction.
-   - lang is ISO 639-1 language code array. Empty array means no language restriction.
+   - lang is ignored for headline stats because raw mention objects do not include language metadata.
+
+For geo-scoped runs (${hasGeoScope ? 'THIS RUN IS GEO-SCOPED' : 'this run is not geo-scoped'}):
+${hasGeoScope ? `
+5. Use brand24_project_sources with operationName="getMentionsTopAuthors" for the selected numeric projectId from ${startDate} to ${endDate}. Do NOT pass server-side filters; aggregate ctr/lang filters have been proven no-op for Brand24 MCP.
+6. Inspect the raw Mention objects and filter client-side:
+   - PH/client-country confirmed mentions = mentions where country is included in ${JSON.stringify(geoFilter)}
+   - unknownCountryCount = mentions where country == null
+   - excludedKnownCountryCount = mentions with country present but not in ${JSON.stringify(geoFilter)}
+7. totalMentions = count of PH/client-country confirmed mentions in the returned raw mention set.
+8. Sentiment counts = count sentiment field over only the PH/client-country confirmed mentions.
+9. There is no exact reach field on returned Mention objects. If viewsCount exists, set totalReach to the sum of viewsCount over PH/client-country confirmed mentions and set reachSource="viewsCount". If viewsCount is missing, use followersCount and set reachSource="followersCount". If neither exists, totalReach=0 and reachSource=null.
+10. Track mentionSampleSize = number of raw mentions returned by getMentionsTopAuthors. If the endpoint returns 100 or fewer ranked/top records, set sampleCaveat warning that this is a ranked sample, not a full mention export.
+` : `
+5. Use brand24_project_sources with operationName="getProjectSourceCategories" for the selected numeric projectId from ${startDate} to ${endDate}. Do not pass a project name if the tool expects projectId.
 6. Sum across the source category result:
    - totalMentions = sum of source category count values
 7. Reach and sentiment are not available from getProjectSourceCategories. Optionally call brand24_topics_overview with the same projectId/date/filter as a secondary enrichment source ONLY for reach/sentiment/topic context.
    - If topics_overview returns topics, sum topic reach and topic sentiment for totalReach/positiveMentions/neutralMentions/negativeMentions.
    - If topics_overview returns zero topics but project_sources returns non-zero mentions, keep totalMentions from project_sources and return totalReach/sentiment as 0 with listenerWarning explaining that topic/sentiment enrichment was unavailable.
+`}
 
-Known limitation: topics_overview is Lab24 topic clustering, not a raw mention counter. Never use topics_overview alone for headline Total Mentions. A zero-topic result can mean no clusters formed, not no mentions. project_sources getProjectSourceCategories is the authoritative filtered headline mention source.
+Known limitations:
+- Server-side Brand24 aggregate ctr/lang filters are not trusted.
+- topics_overview is Lab24 topic clustering, not a raw mention counter. Never use topics_overview alone for headline Total Mentions.
+- getMentionsTopAuthors may return a capped/ranked sample. If capped, label totals as sample-based instead of full dashboard totals.
 
 Return ONLY valid JSON:
-If found: {"found":true,"projectName":"...","projectId":123,"projectTotalUnfiltered":0,"projectIdSource":"brand24_get_projects current request","matchingProjectCandidates":[{"projectName":"...","projectId":123,"totalMentions":0}],"totalMentions":0,"totalReach":0,"positiveMentions":0,"negativeMentions":0,"neutralMentions":0,"dailyStats":[],"periodDays":${periodDays},"filtersApplied":{"ctr":${JSON.stringify(geoFilter)},"lang":${JSON.stringify(langFilter)}},"sourceCategoriesStatus":"ok","sourceCategoriesError":null,"sourceCategoriesReturned":0,"sourceCategories":[{"name":"News","count":0}],"topicsOverviewStatus":"ok","topicsOverviewError":null,"topicsReturned":0,"topicsLimit":0,"listenerWarning":"optional warning when source categories show mentions but topic/reach/sentiment enrichment was unavailable"}
+If found: {"found":true,"projectName":"...","projectId":123,"projectTotalUnfiltered":0,"projectIdSource":"brand24_get_projects current request","matchingProjectCandidates":[{"projectName":"...","projectId":123,"totalMentions":0}],"totalMentions":0,"totalReach":0,"reachSource":"viewsCount","positiveMentions":0,"negativeMentions":0,"neutralMentions":0,"dailyStats":[],"periodDays":${periodDays},"filtersApplied":{"ctr":${JSON.stringify(geoFilter)},"lang":${JSON.stringify(langFilter)}},"clientSideCountryFilter":${hasGeoScope},"mentionSampleStatus":"ok","mentionSampleError":null,"mentionSampleSize":0,"phConfirmedMentions":0,"unknownCountryCount":0,"excludedKnownCountryCount":0,"countryFieldCompletenessPct":0,"sampleCaveat":"optional warning if getMentionsTopAuthors appears capped/ranked","sourceCategoriesStatus":"ok","sourceCategoriesError":null,"sourceCategoriesReturned":0,"sourceCategories":[{"name":"News","count":0}],"topicsOverviewStatus":"ok","topicsOverviewError":null,"topicsReturned":0,"topicsLimit":0,"listenerWarning":"optional warning when totals are sample-based or enrichment was unavailable"}
+If raw mentions fail: {"found":false,"searchedFor":"${brand}","projectName":"...","projectId":123,"projectTotalUnfiltered":0,"projectIdSource":"brand24_get_projects current request","matchingProjectCandidates":[{"projectName":"...","projectId":123,"totalMentions":0}],"totalMentions":0,"totalReach":0,"positiveMentions":0,"negativeMentions":0,"neutralMentions":0,"dailyStats":[],"periodDays":${periodDays},"filtersApplied":{"ctr":${JSON.stringify(geoFilter)},"lang":${JSON.stringify(langFilter)}},"clientSideCountryFilter":${hasGeoScope},"mentionSampleStatus":"error","mentionSampleError":"actual status/error message from brand24_project_sources getMentionsTopAuthors","mentionSampleSize":0,"phConfirmedMentions":0,"unknownCountryCount":0,"excludedKnownCountryCount":0,"listenerError":"brand24_project_sources getMentionsTopAuthors failed: actual status/error message"}
 If project_sources fails: {"found":false,"searchedFor":"${brand}","projectName":"...","projectId":123,"projectTotalUnfiltered":0,"projectIdSource":"brand24_get_projects current request","matchingProjectCandidates":[{"projectName":"...","projectId":123,"totalMentions":0}],"totalMentions":0,"totalReach":0,"positiveMentions":0,"negativeMentions":0,"neutralMentions":0,"dailyStats":[],"periodDays":${periodDays},"filtersApplied":{"ctr":${JSON.stringify(geoFilter)},"lang":${JSON.stringify(langFilter)}},"sourceCategoriesStatus":"error","sourceCategoriesError":"actual status/error message from brand24_project_sources getProjectSourceCategories","sourceCategoriesReturned":0,"topicsOverviewStatus":"not_run","topicsOverviewError":null,"topicsReturned":0,"topicsLimit":0,"listenerError":"brand24_project_sources getProjectSourceCategories failed: actual status/error message"}
 If not found: {"found":false,"searchedFor":"${brand}","availableProjects":["p1","p2"],"matchingProjectCandidates":[],"listenerError":"No matching Brand24 project found"}`
   );
@@ -222,15 +259,23 @@ If not found: {"found":false,"searchedFor":"${brand}","availableProjects":["p1",
   if (normalized.sourceCategoriesStatus === 'error' && !normalized.listenerError) {
     normalized.listenerError = `brand24_project_sources getProjectSourceCategories failed: ${normalized.sourceCategoriesError || 'unknown error'}`;
   }
+  if (normalized.mentionSampleStatus === 'error' && !normalized.listenerError) {
+    normalized.listenerError = `brand24_project_sources getMentionsTopAuthors failed: ${normalized.mentionSampleError || 'unknown error'}`;
+  }
   if (normalized.found && normalized.totalMentions === 0 && normalized.sourceCategoriesStatus !== 'error' && !normalized.listenerError) {
-    normalized.listenerError = 'brand24_project_sources returned zero filtered mentions; verify projectId and filters against the Brand24 dashboard';
+    normalized.listenerError = normalized.clientSideCountryFilter
+      ? 'Client-side country filter returned zero confirmed mentions from the raw mention sample; verify projectId and sample coverage against the Brand24 dashboard'
+      : 'brand24_project_sources returned zero filtered mentions; verify projectId and filters against the Brand24 dashboard';
   }
   const hasFilters = (normalized.filtersApplied?.ctr?.length || 0) > 0 || (normalized.filtersApplied?.lang?.length || 0) > 0;
-  if (normalized.found && hasFilters && normalized.projectTotalUnfiltered > 0) {
+  if (normalized.found && hasFilters && !normalized.clientSideCountryFilter && normalized.projectTotalUnfiltered > 0) {
     const filteredShareOfGlobal = normalized.totalMentions / normalized.projectTotalUnfiltered;
     if (filteredShareOfGlobal > 0.8) {
       normalized.listenerError = `Filtered project_sources total (${normalized.totalMentions}) is ${(filteredShareOfGlobal * 100).toFixed(1)}% of the unfiltered project total (${normalized.projectTotalUnfiltered}); filters may be ignored or malformed. Verify against Brand24 dashboard before using this as a filtered number.`;
     }
+  }
+  if (normalized.clientSideCountryFilter && normalized.sampleCaveat && !normalized.listenerError) {
+    normalized.listenerWarning = normalized.sampleCaveat;
   }
   console.log('[Listener] Brand24 source categories diagnostics', {
     brand,
@@ -242,6 +287,11 @@ If not found: {"found":false,"searchedFor":"${brand}","availableProjects":["p1",
     sourceCategoriesStatus: normalized.sourceCategoriesStatus,
     sourceCategoriesError: normalized.sourceCategoriesError,
     sourceCategoriesReturned: normalized.sourceCategoriesReturned,
+    clientSideCountryFilter: normalized.clientSideCountryFilter,
+    mentionSampleStatus: normalized.mentionSampleStatus,
+    mentionSampleSize: normalized.mentionSampleSize,
+    phConfirmedMentions: normalized.phConfirmedMentions,
+    unknownCountryCount: normalized.unknownCountryCount,
     topicsOverviewStatus: normalized.topicsOverviewStatus,
     topicsOverviewError: normalized.topicsOverviewError,
     topicsReturned: normalized.topicsReturned,
@@ -268,6 +318,12 @@ function trackerAgent(d) {
     dailyStats: d.dailyStats || [], found: d.found, projectName: d.projectName,
     projectId: d.projectId, projectTotalUnfiltered: d.projectTotalUnfiltered, projectIdSource: d.projectIdSource,
     filtersApplied: d.filtersApplied,
+    clientSideCountryFilter: d.clientSideCountryFilter,
+    mentionSampleStatus: d.mentionSampleStatus, mentionSampleError: d.mentionSampleError,
+    mentionSampleSize: d.mentionSampleSize, phConfirmedMentions: d.phConfirmedMentions,
+    unknownCountryCount: d.unknownCountryCount, excludedKnownCountryCount: d.excludedKnownCountryCount,
+    countryFieldCompletenessPct: d.countryFieldCompletenessPct, sampleCaveat: d.sampleCaveat,
+    reachSource: d.reachSource,
     sourceCategoriesStatus: d.sourceCategoriesStatus, sourceCategoriesError: d.sourceCategoriesError,
     sourceCategoriesReturned: d.sourceCategoriesReturned, sourceCategories: d.sourceCategories,
     topicsOverviewStatus: d.topicsOverviewStatus, topicsOverviewError: d.topicsOverviewError,
@@ -307,7 +363,9 @@ TOP TOPICS: ${context.topTopics?.map(t => `${t.name}(${t.mentions})`).join(', ')
     `Senior social media analyst, Philippine agency. Analyze ${brand} (${period}).
 METRICS: Mentions ${metrics.mentions.total} | Reach ${fmt(metrics.totalReach)} | ${metrics.sentiment.positive.pct}% pos / ${metrics.sentiment.negative.pct}% neg / ${metrics.sentiment.neutral.pct}% neu
 BRAND24 LISTENER SCOPE: ${formatListenerScope(metrics.filtersApplied)}
+BRAND24 RAW SAMPLE NOTE: ${metrics.clientSideCountryFilter ? `${metrics.mentions.total} country-confirmed mentions from ${metrics.mentionSampleSize ?? 0} raw top-author mentions; ${metrics.unknownCountryCount ?? 0} mentions had unknown location. ${metrics.sampleCaveat || ''}` : 'n/a'}
 If Brand24 listener scope is global/unfiltered, do not describe Brand24 totals as Philippines-only. If it is country-filtered to PH, you may describe the Brand24 totals as Philippines-filtered.
+If the raw sample note says top-author sample or ranked sample, do not describe the mention count as a full dashboard total.
 ${b24Block}
 ${grokBlock}
 Return valid JSON — name specific events from Brand24 and Grok:
@@ -603,6 +661,7 @@ Executive summary: ${analysis?.executiveSummary || 'n/a'}
 Spike drivers: ${analysis?.spikeDrivers?.join(' | ') || 'n/a'}
 Sentiment narrative: ${analysis?.sentimentNarrative || 'n/a'}
 Brand24 listener scope: ${formatListenerScope(metrics?.filtersApplied)}
+Brand24 raw sample: ${metrics?.clientSideCountryFilter ? `${metrics?.phConfirmedMentions ?? metrics?.mentions?.total ?? 0} country-confirmed mentions from ${metrics?.mentionSampleSize ?? 0} raw mentions; ${metrics?.unknownCountryCount ?? 0} location unknown; ${metrics?.sampleCaveat || 'no sample caveat returned'}` : 'n/a'}
 Brand24 source categories: ${metrics?.sourceCategoriesReturned ?? 'n/a'} categories returned by filtered project_sources
 Brand24 enrichment caveat: ${metrics?.listenerWarning || (metrics?.topicsLimit ? `topics_overview returned ${metrics?.topicsReturned ?? 'unknown'} topics with limit ${metrics.topicsLimit}; reach/sentiment may be incomplete` : 'n/a')}
 Brand24 events: ${context?.events?.map(e => `${e.date}: ${e.description}`).join(' | ') || 'n/a'}
@@ -914,8 +973,8 @@ Return a concise intelligence summary, recurring themes, specific public posts o
           </div>
         )}
         <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, marginBottom:14 }}>
-          <Metric label="Total Mentions" value={fmt(metrics.mentions.total)} sub={hasB24?`Brand24 live · ${formatListenerScope(metrics.filtersApplied)}`:'No Brand24 project'}/>
-          <Metric label="Total Reach" value={fmt(metrics.totalReach)} sub="30-day period"/>
+          <Metric label="Total Mentions" value={fmt(metrics.mentions.total)} sub={mentionMetricSub(metrics, hasB24)}/>
+          <Metric label="Total Reach" value={fmt(metrics.totalReach)} sub={reachMetricSub(metrics)}/>
           <Metric label="Daily Avg" value={metrics.mentions.dailyAvg}/>
         </div>
 
