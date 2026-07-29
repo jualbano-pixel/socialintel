@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
 const LIME = '#CCFF00';
 const CLAUDE_MODEL = 'claude-sonnet-4-6';
@@ -675,6 +675,7 @@ Recommendations: ${report?.recommendations?.join(' | ') || 'n/a'}
 
 // ── MAIN APP ──────────────────────────────────────────────────
 export default function SignalIntel() {
+  const reportRef = useRef(null);
   const [step, setStep] = useState('setup');
   const [brand, setBrand] = useState('EastWest Bank');
   const [competitors, setComp] = useState(['BPI','BDO','UnionBank','Metrobank','Security Bank']);
@@ -698,6 +699,8 @@ export default function SignalIntel() {
   const [queryOpen, setQueryOpen] = useState(false);
   const [queryLoading, setQueryLoading] = useState(false);
   const [queryError, setQueryError] = useState('');
+  const [pdfLoading, setPdfLoading] = useState(false);
+  const [pdfError, setPdfError] = useState('');
 
   const sa = (k, v) => setAgents(p => ({ ...p, [k]: v }));
   const so = (k, v) => setOut(p => ({ ...p, [k]: v }));
@@ -824,6 +827,41 @@ Return a concise intelligence summary, recurring themes, specific public posts o
     }
   };
 
+  const downloadPdf = async () => {
+    if (!reportRef.current || pdfLoading) return;
+    setPdfLoading(true);
+    setPdfError('');
+    try {
+      const clone = reportRef.current.cloneNode(true);
+      clone.querySelectorAll('[data-pdf-hidden="true"]').forEach(el => el.remove());
+      const title = `Signal Intel ${brand} ${period}`;
+      const response = await fetch('/api/export-pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, reportHtml: clone.outerHTML }),
+      });
+      const contentType = response.headers.get('content-type') || '';
+      if (!response.ok) {
+        const data = contentType.includes('application/json') ? await response.json() : { error: await response.text() };
+        throw new Error(data.error || `PDF export failed with ${response.status}`);
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'signal-intel-report'}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error('[PDF Export] error', e);
+      setPdfError(e.message);
+    } finally {
+      setPdfLoading(false);
+    }
+  };
+
   // ── SETUP SCREEN ────────────────────────────────────────────
   if (step === 'setup') return (
     <div style={{ minHeight:'100vh', padding:'38px 22px' }}>
@@ -928,7 +966,7 @@ Return a concise intelligence summary, recurring themes, specific public posts o
   // ── REPORT SCREEN ────────────────────────────────────────────
   if (step === 'report' && metrics && analysis && competitive && report) return (
     <div style={{ minHeight:'100vh', padding:'28px 18px' }} className="fade-in">
-      <div style={{ maxWidth:960, margin:'0 auto' }}>
+      <div ref={reportRef} style={{ maxWidth:960, margin:'0 auto' }}>
 
         {/* Header */}
         <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:26, paddingBottom:18, borderBottom:'1px solid #181818' }}>
@@ -940,13 +978,20 @@ Return a concise intelligence summary, recurring themes, specific public posts o
             <p style={{ color:'#555', fontSize:13, margin:0 }}>{period} · Prepared by Praxis Experiential</p>
           </div>
           <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:8 }}>
-            <div style={{ display:'flex', gap:8, flexWrap:'wrap', justifyContent:'flex-end' }}>
+            <div data-pdf-hidden="true" style={{ display:'flex', gap:8, flexWrap:'wrap', justifyContent:'flex-end' }}>
+              <button type="button" data-testid="download-pdf" onClick={downloadPdf} disabled={pdfLoading} style={{ background:pdfLoading?'#222':'#1DA1F2', border:'1px solid #1DA1F244', borderRadius:6, padding:'9px 14px', color:'#fff', cursor:pdfLoading?'default':'pointer', fontSize:12, fontWeight:800 }}>{pdfLoading?'Exporting...':'Download PDF'}</button>
               <button type="button" data-testid="ask-ai-header" onClick={() => setAiOpen(true)} style={{ background:LIME, border:'1px solid #000', borderRadius:6, padding:'9px 14px', color:'#000', cursor:'pointer', fontSize:12, fontWeight:800 }}>Ask AI</button>
               <button onClick={() => setStep('setup')} style={{ background:'#111', border:'1px solid #222', borderRadius:6, padding:'9px 14px', color:'#666', cursor:'pointer', fontSize:12 }}>← New Report</button>
             </div>
             <div style={{ display:'flex', gap:4 }}>{AGENTS.map(a => <div key={a.key} title={a.name} style={{ width:8, height:8, borderRadius:'50%', background:'#44ff88' }}/>)}</div>
           </div>
         </div>
+
+        {pdfError && (
+          <div data-pdf-hidden="true" style={{ background:'#1a0000', border:'1px solid #ff444433', borderRadius:8, color:'#ff8a8a', fontSize:12, lineHeight:1.55, padding:'10px 12px', marginBottom:14 }}>
+            PDF export failed: {pdfError}
+          </div>
+        )}
 
         {/* Executive Summary */}
         <div style={{ background:'#0d1100', border:`1px solid ${LIME}20`, borderRadius:10, padding:'16px 20px', marginBottom:14 }}>
