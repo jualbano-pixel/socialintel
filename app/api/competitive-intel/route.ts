@@ -16,6 +16,7 @@ const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY!;
 const XAI_API_KEY = process.env.XAI_API_KEY!;
 const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY!;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
+const GEMINI_MODEL = 'gemini-3.6-flash';
 
 interface CompetitorInput {
   name: string;
@@ -122,7 +123,7 @@ async function pullGemini(competitor: string, dateRange: string): Promise<Source
     if (!GEMINI_API_KEY) return sourceError(source, 'GEMINI_API_KEY is not set');
 
     const res = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -143,6 +144,7 @@ async function pullGemini(competitor: string, dateRange: string): Promise<Source
     const data = await readJsonResponse(res);
     console.log('competitive-intel Gemini response', {
       competitor,
+      model: GEMINI_MODEL,
       status: res.status,
       ok: res.ok,
       candidates: Array.isArray(data?.candidates) ? data.candidates.length : 0,
