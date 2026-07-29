@@ -176,6 +176,7 @@ async function listenerAgent(brand, startDate, endDate, geoFilter = [], langFilt
    - If multiple projects match "${brand}", return matchingProjectCandidates with their projectName/projectId values.
    - Select the exact-name match when available.
    - If duplicate exact-name projects exist and creation/update metadata is unavailable, select the highest numeric projectId because a newer Netflix project may have been created after an older one.
+   - Preserve the matching project's totalMentions from brand24_get_projects as projectTotalUnfiltered for diagnostics only.
    - If you cannot resolve a numeric projectId, do not continue to project_sources. Return found=false with listenerError.
 3. Do NOT use brand24_project_stats for headline totals because it cannot accept country/language filters.
 4. Use brand24_project_sources with operationName="getProjectSourceCategories" for the selected numeric projectId from ${startDate} to ${endDate}. Do not pass a project name if the tool expects projectId.
@@ -191,8 +192,8 @@ async function listenerAgent(brand, startDate, endDate, geoFilter = [], langFilt
 Known limitation: topics_overview is Lab24 topic clustering, not a raw mention counter. Never use topics_overview alone for headline Total Mentions. A zero-topic result can mean no clusters formed, not no mentions. project_sources getProjectSourceCategories is the authoritative filtered headline mention source.
 
 Return ONLY valid JSON:
-If found: {"found":true,"projectName":"...","projectId":123,"projectIdSource":"brand24_get_projects current request","matchingProjectCandidates":[{"projectName":"...","projectId":123}],"totalMentions":0,"totalReach":0,"positiveMentions":0,"negativeMentions":0,"neutralMentions":0,"dailyStats":[],"periodDays":${periodDays},"filtersApplied":{"ctr":${JSON.stringify(geoFilter)},"lang":${JSON.stringify(langFilter)}},"sourceCategoriesStatus":"ok","sourceCategoriesError":null,"sourceCategoriesReturned":0,"sourceCategories":[{"name":"News","count":0}],"topicsOverviewStatus":"ok","topicsOverviewError":null,"topicsReturned":0,"topicsLimit":0,"listenerWarning":"optional warning when source categories show mentions but topic/reach/sentiment enrichment was unavailable"}
-If project_sources fails: {"found":false,"searchedFor":"${brand}","projectName":"...","projectId":123,"projectIdSource":"brand24_get_projects current request","matchingProjectCandidates":[{"projectName":"...","projectId":123}],"totalMentions":0,"totalReach":0,"positiveMentions":0,"negativeMentions":0,"neutralMentions":0,"dailyStats":[],"periodDays":${periodDays},"filtersApplied":{"ctr":${JSON.stringify(geoFilter)},"lang":${JSON.stringify(langFilter)}},"sourceCategoriesStatus":"error","sourceCategoriesError":"actual status/error message from brand24_project_sources getProjectSourceCategories","sourceCategoriesReturned":0,"topicsOverviewStatus":"not_run","topicsOverviewError":null,"topicsReturned":0,"topicsLimit":0,"listenerError":"brand24_project_sources getProjectSourceCategories failed: actual status/error message"}
+If found: {"found":true,"projectName":"...","projectId":123,"projectTotalUnfiltered":0,"projectIdSource":"brand24_get_projects current request","matchingProjectCandidates":[{"projectName":"...","projectId":123,"totalMentions":0}],"totalMentions":0,"totalReach":0,"positiveMentions":0,"negativeMentions":0,"neutralMentions":0,"dailyStats":[],"periodDays":${periodDays},"filtersApplied":{"ctr":${JSON.stringify(geoFilter)},"lang":${JSON.stringify(langFilter)}},"sourceCategoriesStatus":"ok","sourceCategoriesError":null,"sourceCategoriesReturned":0,"sourceCategories":[{"name":"News","count":0}],"topicsOverviewStatus":"ok","topicsOverviewError":null,"topicsReturned":0,"topicsLimit":0,"listenerWarning":"optional warning when source categories show mentions but topic/reach/sentiment enrichment was unavailable"}
+If project_sources fails: {"found":false,"searchedFor":"${brand}","projectName":"...","projectId":123,"projectTotalUnfiltered":0,"projectIdSource":"brand24_get_projects current request","matchingProjectCandidates":[{"projectName":"...","projectId":123,"totalMentions":0}],"totalMentions":0,"totalReach":0,"positiveMentions":0,"negativeMentions":0,"neutralMentions":0,"dailyStats":[],"periodDays":${periodDays},"filtersApplied":{"ctr":${JSON.stringify(geoFilter)},"lang":${JSON.stringify(langFilter)}},"sourceCategoriesStatus":"error","sourceCategoriesError":"actual status/error message from brand24_project_sources getProjectSourceCategories","sourceCategoriesReturned":0,"topicsOverviewStatus":"not_run","topicsOverviewError":null,"topicsReturned":0,"topicsLimit":0,"listenerError":"brand24_project_sources getProjectSourceCategories failed: actual status/error message"}
 If not found: {"found":false,"searchedFor":"${brand}","availableProjects":["p1","p2"],"matchingProjectCandidates":[],"listenerError":"No matching Brand24 project found"}`
   );
   const fallback = {
@@ -224,12 +225,20 @@ If not found: {"found":false,"searchedFor":"${brand}","availableProjects":["p1",
   if (normalized.found && normalized.totalMentions === 0 && normalized.sourceCategoriesStatus !== 'error' && !normalized.listenerError) {
     normalized.listenerError = 'brand24_project_sources returned zero filtered mentions; verify projectId and filters against the Brand24 dashboard';
   }
+  const hasFilters = (normalized.filtersApplied?.ctr?.length || 0) > 0 || (normalized.filtersApplied?.lang?.length || 0) > 0;
+  if (normalized.found && hasFilters && normalized.projectTotalUnfiltered > 0) {
+    const filteredShareOfGlobal = normalized.totalMentions / normalized.projectTotalUnfiltered;
+    if (filteredShareOfGlobal > 0.8) {
+      normalized.listenerError = `Filtered project_sources total (${normalized.totalMentions}) is ${(filteredShareOfGlobal * 100).toFixed(1)}% of the unfiltered project total (${normalized.projectTotalUnfiltered}); filters may be ignored or malformed. Verify against Brand24 dashboard before using this as a filtered number.`;
+    }
+  }
   console.log('[Listener] Brand24 source categories diagnostics', {
     brand,
     projectId: normalized.projectId,
     projectName: normalized.projectName,
     projectIdSource: normalized.projectIdSource,
     filtersApplied: normalized.filtersApplied,
+    projectTotalUnfiltered: normalized.projectTotalUnfiltered,
     sourceCategoriesStatus: normalized.sourceCategoriesStatus,
     sourceCategoriesError: normalized.sourceCategoriesError,
     sourceCategoriesReturned: normalized.sourceCategoriesReturned,
@@ -257,7 +266,7 @@ function trackerAgent(d) {
       neutral: { count: neu, pct: parseFloat((neu/totS*100).toFixed(1)) },
     },
     dailyStats: d.dailyStats || [], found: d.found, projectName: d.projectName,
-    projectId: d.projectId, projectIdSource: d.projectIdSource,
+    projectId: d.projectId, projectTotalUnfiltered: d.projectTotalUnfiltered, projectIdSource: d.projectIdSource,
     filtersApplied: d.filtersApplied,
     sourceCategoriesStatus: d.sourceCategoriesStatus, sourceCategoriesError: d.sourceCategoriesError,
     sourceCategoriesReturned: d.sourceCategoriesReturned, sourceCategories: d.sourceCategories,
@@ -894,7 +903,7 @@ Return a concise intelligence summary, recurring themes, specific public posts o
             <div style={{ color:'#ffb0b0', fontSize:10, letterSpacing:'0.14em', textTransform:'uppercase', fontFamily:"'JetBrains Mono',monospace", marginBottom:4 }}>Listener · Brand24 project_sources error</div>
             <div>{metrics.listenerError}</div>
             <div style={{ color:'#a66666', marginTop:6, fontFamily:"'JetBrains Mono',monospace" }}>
-              status: {metrics.sourceCategoriesStatus || 'unknown'} · projectId: {metrics.projectId || 'unresolved'} · source categories: {metrics.sourceCategoriesReturned ?? 0}
+              status: {metrics.sourceCategoriesStatus || 'unknown'} · projectId: {metrics.projectId || 'unresolved'} · filtered: {metrics.mentions.total ?? 0} · unfiltered project total: {metrics.projectTotalUnfiltered ?? 'n/a'} · source categories: {metrics.sourceCategoriesReturned ?? 0}
             </div>
           </div>
         )}
