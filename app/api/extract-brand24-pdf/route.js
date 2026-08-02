@@ -1,4 +1,5 @@
-import { PDFParse } from 'pdf-parse';
+import pdf from 'pdf-parse/lib/pdf-parse.js';
+import PDFParser from 'pdf2json';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -22,7 +23,7 @@ function parseJSON(text, fallback = {}) {
 function numberFrom(value) {
   if (value === null || value === undefined || value === '') return null;
   if (typeof value === 'number' && Number.isFinite(value)) return Math.round(value);
-  const text = String(value).trim().replace(/\s+/g, '');
+  const text = String(value).trim();
   const match = text.match(/-?[\d,.]+/);
   if (!match) return null;
   return Math.round(Number(match[0].replace(/,/g, '')));
@@ -68,7 +69,97 @@ function normalizeExtracted(data) {
   };
 }
 
+function valueNearLabel(text, label) {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const stopLabels = [
+    'Date range',
+    'Overview',
+    'Total mentions',
+    'Total reach',
+    'Positive mentions',
+    'Neutral mentions',
+    'Negative mentions',
+    'Average Presence Score',
+    'AVE',
+    'Source categories',
+    'TikTok',
+    'News',
+    'Videos',
+    'X \\(Twitter\\)',
+  ].filter(stop => stop !== label).join('|');
+  const match = text.match(new RegExp(`${escaped}\\s*:?\\s+([\\s\\S]*?)(?=\\s+(?:${stopLabels})\\s*:?\\s+|$)`, 'i'));
+  return match ? match[1].trim() : '';
+}
+
+function numberNearLabel(text, label) {
+  return numberFrom(valueNearLabel(text, label));
+}
+
+function pctNearLabel(text, label) {
+  const pctMatch = valueNearLabel(text, label).match(/(-?[\d,.]+)\s*%/);
+  return pctMatch ? pctFrom(pctMatch[1]) : null;
+}
+
+function textNearLabel(text, label) {
+  return valueNearLabel(text, label);
+}
+
+function fallbackExtractFromText(text) {
+  const positiveCount = numberNearLabel(text, 'Positive mentions');
+  const neutralCount = numberNearLabel(text, 'Neutral mentions');
+  const negativeCount = numberNearLabel(text, 'Negative mentions');
+  return normalizeExtracted({
+    totalMentions: numberNearLabel(text, 'Total mentions'),
+    totalReach: numberNearLabel(text, 'Total reach'),
+    positiveMentions: { count: positiveCount, pct: pctNearLabel(text, 'Positive mentions') },
+    neutralMentions: { count: neutralCount, pct: pctNearLabel(text, 'Neutral mentions') },
+    negativeMentions: { count: negativeCount, pct: pctNearLabel(text, 'Negative mentions') },
+    dateRange: textNearLabel(text, 'Date range'),
+    averagePresenceScore: textNearLabel(text, 'Average Presence Score'),
+    ave: textNearLabel(text, 'AVE'),
+    sourceCategories: [],
+    confidence: 'low',
+    warnings: ['Claude extraction was unavailable; fields were prefilled from Brand24 text labels. Confirm every value before running.'],
+  });
+}
+
+function parseWithPdf2Json(buffer) {
+  return new Promise((resolve, reject) => {
+    const parser = new PDFParser();
+    parser.on('pdfParser_dataError', err => reject(err.parserError || err));
+    parser.on('pdfParser_dataReady', data => {
+      const text = data?.Pages?.map(page => (
+        page.Texts?.map(item => (
+          item.R?.map(run => {
+            try { return decodeURIComponent(run.T || ''); } catch { return run.T || ''; }
+          }).join('')
+        )).join(' ') || ''
+      )).join('\n') || '';
+      resolve({ text, numpages: data?.Pages?.length || 0 });
+    });
+    parser.parseBuffer(buffer);
+  });
+}
+
+async function extractPdfText(buffer, diagnostics) {
+  try {
+    const parsed = await pdf(buffer);
+    const text = (parsed.text || '').replace(/\u0000/g, '').trim();
+    diagnostics.push(`parser=pdf-parse chars=${text.length} pages=${parsed.numpages ?? 'unknown'}`);
+    if (text.length >= 80) return { text, pages: parsed.numpages ?? null, parser: 'pdf-parse' };
+  } catch (e) {
+    diagnostics.push(`pdf-parse error=${e.message || e}`);
+    console.error('[Brand24 PDF extract] pdf-parse failed', e);
+  }
+
+  const parsed = await parseWithPdf2Json(buffer);
+  const text = (parsed.text || '').replace(/\u0000/g, '').trim();
+  diagnostics.push(`parser=pdf2json chars=${text.length} pages=${parsed.numpages ?? 'unknown'}`);
+  return { text, pages: parsed.numpages ?? null, parser: 'pdf2json' };
+}
+
 export async function POST(request) {
+  const diagnostics = [];
   try {
     const form = await request.formData();
     const file = form.get('file');
@@ -79,15 +170,31 @@ export async function POST(request) {
       return Response.json({ error: 'Only PDF uploads are supported.' }, { status: 400 });
     }
 
+    diagnostics.push(`file=${file.name || 'unnamed'} type=${file.type || 'unknown'} size=${file.size || 0}`);
+    console.log('[Brand24 PDF extract] upload received', { name: file.name, type: file.type, size: file.size });
     const buffer = Buffer.from(await file.arrayBuffer());
-    const parser = new PDFParse({ data: buffer });
-    const parsed = await parser.getText();
-    await parser.destroy();
-    const extractedText = (parsed.text || '').replace(/\u0000/g, '').trim();
+    const parsed = await extractPdfText(buffer, diagnostics);
+    const extractedText = parsed.text;
+    const labelHits = ['Total mentions', 'Total reach', 'Positive mentions', 'Negative mentions', 'Average Presence Score', 'AVE']
+      .filter(label => extractedText.toLowerCase().includes(label.toLowerCase()));
+    diagnostics.push(`pdfTextChars=${extractedText.length}`);
+    diagnostics.push(`selectedParser=${parsed.parser}`);
+    diagnostics.push(`brand24LabelsFound=${labelHits.length ? labelHits.join(', ') : 'none'}`);
+    console.log('[Brand24 PDF extract] text extracted', {
+      chars: extractedText.length,
+      pages: parsed.pages,
+      parser: parsed.parser,
+      labelHits,
+      preview: extractedText.slice(0, 500),
+    });
     if (!extractedText || extractedText.length < 80) {
-      return Response.json({ error: 'Could not read enough text from this PDF. Please enter the Brand24 numbers manually.' }, { status: 422 });
+      return Response.json({
+        error: `Could not read enough text from this PDF (${extractedText.length} characters). Please enter the Brand24 numbers manually.`,
+        diagnostics,
+      }, { status: 422 });
     }
 
+    console.log('[Brand24 PDF extract] calling Claude extraction');
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -125,11 +232,35 @@ ${extractedText.slice(0, 45000)}`,
       }),
     });
     const data = await response.json();
+    diagnostics.push(`claudeStatus=${response.status}`);
+    console.log('[Brand24 PDF extract] Claude response', {
+      ok: response.ok,
+      status: response.status,
+      error: data.error?.message || data.error || null,
+      textChars: parseClaudeText(data)?.length || 0,
+      textPreview: parseClaudeText(data)?.slice(0, 500) || '',
+    });
     if (!response.ok || data.error) {
-      return Response.json({ error: data.error?.message || data.error || `Claude extraction failed with ${response.status}` }, { status: 502 });
+      const fallback = fallbackExtractFromText(extractedText);
+      diagnostics.push('fallback=label-parser-after-claude-error');
+      fallback.warnings = [
+        `Claude extraction failed: ${data.error?.message || data.error || response.status}.`,
+        ...fallback.warnings,
+      ];
+      return Response.json({
+        fileName: file.name || 'Brand24 export.pdf',
+        uploadDate: new Date().toISOString(),
+        extracted: fallback,
+        diagnostics,
+        textPreview: extractedText.slice(0, 1200),
+      });
     }
 
-    const raw = parseJSON(parseClaudeText(data), {});
+    const claudeText = parseClaudeText(data);
+    diagnostics.push(`claudeTextChars=${claudeText?.length || 0}`);
+    const raw = parseJSON(claudeText, {});
+    diagnostics.push(`jsonKeys=${Object.keys(raw).join(', ') || 'none'}`);
+    console.log('[Brand24 PDF extract] parsed JSON keys', Object.keys(raw));
     const extracted = normalizeExtracted(raw);
     const requiredMissing = [
       ['Total mentions', extracted.totalMentions],
@@ -141,15 +272,26 @@ ${extractedText.slice(0, 45000)}`,
       extracted.confidence = 'low';
       extracted.warnings = [...extracted.warnings, `Missing required fields: ${requiredMissing.join(', ')}.`];
     }
+    console.log('[Brand24 PDF extract] normalized fields', {
+      totalMentions: extracted.totalMentions,
+      totalReach: extracted.totalReach,
+      positive: extracted.positiveMentions,
+      neutral: extracted.neutralMentions,
+      negative: extracted.negativeMentions,
+      dateRange: extracted.dateRange,
+      confidence: extracted.confidence,
+      warnings: extracted.warnings,
+    });
 
     return Response.json({
       fileName: file.name || 'Brand24 export.pdf',
       uploadDate: new Date().toISOString(),
       extracted,
+      diagnostics,
       textPreview: extractedText.slice(0, 1200),
     });
   } catch (e) {
     console.error('extract-brand24-pdf error:', e);
-    return Response.json({ error: e.message || 'Failed to extract Brand24 PDF.' }, { status: 500 });
+    return Response.json({ error: e.message || 'Failed to extract Brand24 PDF.', diagnostics }, { status: 500 });
   }
 }

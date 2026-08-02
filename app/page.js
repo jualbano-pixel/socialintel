@@ -888,6 +888,7 @@ export default function SignalIntel() {
   const [pdfError, setPdfError] = useState('');
   const [uploadLoading, setUploadLoading] = useState(false);
   const [uploadError, setUploadError] = useState('');
+  const [uploadStatus, setUploadStatus] = useState('');
   const [manualData, setManualData] = useState(null);
 
   const sa = (k, v) => setAgents(p => ({ ...p, [k]: v }));
@@ -896,26 +897,34 @@ export default function SignalIntel() {
   const done = Object.values(agents).filter(v => v === 'done').length;
   const setManualField = (key, value) => setManualData(p => ({ ...(p || {}), [key]: value }));
 
+  const blankManualData = (overrides = {}) => ({
+    fileName: 'Manual Brand24 entry',
+    uploadDate: new Date().toISOString(),
+    dateRange: period,
+    totalMentions: '',
+    totalReach: '',
+    positiveMentions: '',
+    neutralMentions: '',
+    negativeMentions: '',
+    positivePct: '',
+    neutralPct: '',
+    negativePct: '',
+    averagePresenceScore: '',
+    ave: '',
+    sourceCategories: [],
+    confidence: 'manual',
+    warnings: ['Manual entry mode: type the Brand24 dashboard/PDF values before confirming.'],
+    diagnostics: [],
+    ...overrides,
+  });
+
   const startManualEntry = () => {
-    setUploadError('');
     setManualData({
-      fileName: 'Manual Brand24 entry',
-      uploadDate: new Date().toISOString(),
-      dateRange: period,
-      totalMentions: '',
-      totalReach: '',
-      positiveMentions: '',
-      neutralMentions: '',
-      negativeMentions: '',
-      positivePct: '',
-      neutralPct: '',
-      negativePct: '',
-      averagePresenceScore: '',
-      ave: '',
-      sourceCategories: [],
-      confidence: 'manual',
-      warnings: ['Manual entry mode: type the Brand24 dashboard/PDF values before confirming.'],
+      ...blankManualData(),
+      source: 'manual',
     });
+    setUploadError('');
+    setUploadStatus('');
   };
 
   const uploadBrand24Pdf = async e => {
@@ -923,16 +932,23 @@ export default function SignalIntel() {
     e.target.value = '';
     if (!file) return;
     setUploadLoading(true);
+    setUploadStatus(`Reading ${file.name}...`);
     setUploadError('');
     setManualData(null);
     try {
       const form = new FormData();
       form.append('file', file);
+      console.log('[Brand24 PDF upload] calling /api/extract-brand24-pdf', { name: file.name, size: file.size, type: file.type });
+      setUploadStatus('Calling /api/extract-brand24-pdf...');
       const response = await fetch('/api/extract-brand24-pdf', { method: 'POST', body: form });
-      const data = await response.json();
+      const contentType = response.headers.get('content-type') || '';
+      const data = contentType.includes('application/json') ? await response.json() : { error: await response.text() };
+      console.log('[Brand24 PDF upload] extraction response', { ok: response.ok, status: response.status, data });
+      setUploadStatus(`Extraction response received (${response.status}).`);
       if (!response.ok || data.error) throw new Error(data.error || `PDF extraction failed with ${response.status}`);
       const extracted = data.extracted || {};
       setManualData({
+        source: 'pdf',
         fileName: data.fileName || file.name,
         uploadDate: data.uploadDate || new Date().toISOString(),
         dateRange: extracted.dateRange || period,
@@ -949,11 +965,20 @@ export default function SignalIntel() {
         sourceCategories: extracted.sourceCategories || [],
         confidence: extracted.confidence || 'medium',
         warnings: extracted.warnings || [],
+        diagnostics: data.diagnostics || [],
       });
+      setUploadStatus('PDF extraction completed. Please confirm the numbers before running.');
+      setUploadError('');
     } catch (e) {
       console.error('[Brand24 PDF upload] error', e);
-      setUploadError(`${e.message} You can still enter the values manually below.`);
-      startManualEntry();
+      setUploadError(`Couldn't read your PDF — ${e.message}. Please enter values manually below.`);
+      setUploadStatus('PDF extraction failed. Manual confirmation is required.');
+      setManualData(blankManualData({
+        source: 'pdf-failed',
+        fileName: file.name,
+        confidence: 'extraction failed',
+        warnings: [`PDF extraction failed: ${e.message}`, 'Type the Brand24 dashboard/PDF values before confirming.'],
+      }));
     } finally {
       setUploadLoading(false);
     }
@@ -1227,17 +1252,25 @@ Return a concise intelligence summary, recurring themes, specific public posts o
               </div>
             </div>
 
+            {uploadStatus && <div style={{ color:'#8fb8ff', fontSize:12, lineHeight:1.55, background:'#06111f', border:'1px solid #1DA1F244', borderRadius:6, padding:'9px 11px', marginBottom:12 }}>{uploadStatus}</div>}
             {uploadError && <div style={{ color:'#ffb0b0', fontSize:12, lineHeight:1.55, background:'#1a0000', border:'1px solid #ff444433', borderRadius:6, padding:'9px 11px', marginBottom:12 }}>{uploadError}</div>}
 
             {manualData && (
               <div style={{ background:'#0b0b0b', border:'1px solid #25200f', borderRadius:8, padding:14 }}>
                 <div style={{ display:'flex', justifyContent:'space-between', gap:10, alignItems:'flex-start', marginBottom:12 }}>
                   <div>
-                    <div style={{ color:'#f0f0f0', fontSize:14, fontWeight:800, marginBottom:3 }}>Here’s what we read from your PDF</div>
+                    <div style={{ color:'#f0f0f0', fontSize:14, fontWeight:800, marginBottom:3 }}>
+                      {manualData.source === 'pdf' ? 'Here’s what we read from your PDF' : manualData.source === 'pdf-failed' ? 'PDF extraction failed — enter the numbers manually' : 'Manual Brand24 entry'}
+                    </div>
                     <div style={{ color:'#777', fontSize:11 }}>{manualData.fileName} · Confidence: {manualData.confidence || 'manual'}</div>
                   </div>
                   <span style={{ color:'#ffda75', border:'1px solid #ffda7544', borderRadius:999, padding:'3px 8px', fontSize:9, fontFamily:"'JetBrains Mono',monospace", textTransform:'uppercase', whiteSpace:'nowrap' }}>Confirm Required</span>
                 </div>
+                {manualData.diagnostics?.length > 0 && (
+                  <div style={{ background:'#101010', border:'1px solid #252525', borderRadius:6, padding:'8px 10px', color:'#888', fontSize:10, lineHeight:1.55, fontFamily:"'JetBrains Mono',monospace", marginBottom:12 }}>
+                    {manualData.diagnostics.map((d, i) => <div key={i}>// {d}</div>)}
+                  </div>
+                )}
                 {manualData.warnings?.length > 0 && (
                   <div style={{ color:'#c9a94b', fontSize:11, lineHeight:1.55, marginBottom:12 }}>
                     {manualData.warnings.map((w, i) => <div key={i}>• {w}</div>)}
