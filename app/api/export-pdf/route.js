@@ -85,7 +85,11 @@ export async function POST(request) {
 
     const page = await browser.newPage();
     await page.setJavaScriptEnabled(false);
-    await page.setContent(documentHtml({ title, reportHtml }), { waitUntil: 'networkidle0', timeout: 30000 });
+    await page.setContent(documentHtml({ title, reportHtml }), { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.evaluate(() => Promise.race([
+      document.fonts?.ready ?? Promise.resolve(),
+      new Promise(resolve => setTimeout(resolve, 5000)),
+    ]));
     const pdf = await page.pdf({
       format: 'A4',
       printBackground: true,
