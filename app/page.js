@@ -155,15 +155,52 @@ function trackerAgent(d) {
   const neu = d.neutralMentions || (tot - pos - neg > 0 ? tot - pos - neg : 0);
   const totS = pos + neg + neu || 1;
   const days = Math.max(d.dailyStats?.length || 1, 1);
+  const overridePct = (value, fallback) => {
+    const n = Number(value);
+    return value !== undefined && value !== '' && Number.isFinite(n) ? n : fallback;
+  };
   return {
     mentions: { total: tot, dailyAvg: Math.round(tot / days) },
     totalReach: reach,
     sentiment: {
-      positive: { count: pos, pct: parseFloat((pos/totS*100).toFixed(1)) },
-      negative: { count: neg, pct: parseFloat((neg/totS*100).toFixed(1)) },
-      neutral: { count: neu, pct: parseFloat((neu/totS*100).toFixed(1)) },
+      positive: { count: pos, pct: overridePct(d.positivePct, parseFloat((pos/totS*100).toFixed(1))) },
+      negative: { count: neg, pct: overridePct(d.negativePct, parseFloat((neg/totS*100).toFixed(1))) },
+      neutral: { count: neu, pct: overridePct(d.neutralPct, parseFloat((neu/totS*100).toFixed(1))) },
     },
     dailyStats: d.dailyStats || [], found: d.found, projectName: d.projectName,
+    manualVerified: !!d.manualVerified,
+    manualUploadDate: d.manualUploadDate,
+    manualFileName: d.manualFileName,
+    averagePresenceScore: d.averagePresenceScore,
+    ave: d.ave,
+    sourceCategories: d.sourceCategories || [],
+  };
+}
+
+function manualSnapshotToListenerData(manual, brand) {
+  const totalMentions = Number(manual.totalMentions) || 0;
+  const positiveMentions = Number(manual.positiveMentions) || 0;
+  const negativeMentions = Number(manual.negativeMentions) || 0;
+  const typedNeutral = manual.neutralMentions === '' || manual.neutralMentions === null || manual.neutralMentions === undefined ? null : Number(manual.neutralMentions);
+  const neutralMentions = Number.isFinite(typedNeutral) ? typedNeutral : Math.max(totalMentions - positiveMentions - negativeMentions, 0);
+  return {
+    found: true,
+    projectName: `${brand} · manually verified Brand24 PDF`,
+    totalMentions,
+    totalReach: Number(manual.totalReach) || 0,
+    positiveMentions,
+    negativeMentions,
+    neutralMentions,
+    positivePct: manual.positivePct,
+    negativePct: manual.negativePct,
+    neutralPct: manual.neutralPct,
+    dailyStats: [],
+    manualVerified: true,
+    manualUploadDate: manual.uploadDate || new Date().toISOString(),
+    manualFileName: manual.fileName || 'Manual Brand24 data',
+    averagePresenceScore: manual.averagePresenceScore || '',
+    ave: manual.ave || '',
+    sourceCategories: manual.sourceCategories || [],
   };
 }
 
@@ -449,15 +486,23 @@ function socialListeningSnapshot(brand, metrics, demoMode) {
   const nonSocialMentions = Math.max(total - socialMentions, 0);
   const socialReach = Math.round(reach * 0.76);
   const nonSocialReach = Math.max(reach - socialReach, 0);
+  const isManual = !!metrics.manualVerified;
+  const sourceCategories = metrics.sourceCategories?.length
+    ? metrics.sourceCategories.map((s, i) => ({
+      name: s.name || `Source ${i + 1}`,
+      pct: Number(s.pct) || pct(Number(s.count) || 0, total),
+      color: DEMO_SOCIAL_LISTENING.sources[i % DEMO_SOCIAL_LISTENING.sources.length].color,
+    }))
+    : DEMO_SOCIAL_LISTENING.sources;
   return {
     ...DEMO_SOCIAL_LISTENING,
     overview: [
-      { label: 'Total mentions', value: fmt(total), change: 'Live', tone: 'live' },
-      { label: 'Total reach', value: fmt(reach), change: 'Live', tone: 'live' },
+      { label: 'Total mentions', value: fmt(total), change: isManual ? 'Manual' : 'Live', tone: 'live' },
+      { label: 'Total reach', value: fmt(reach), change: isManual ? 'Manual' : 'Live', tone: 'live' },
       { label: 'Positive mentions', value: fmt(positive), change: `${metrics.sentiment.positive.pct}%`, tone: 'up' },
       { label: 'Negative mentions', value: fmt(negative), change: `${metrics.sentiment.negative.pct}%`, tone: 'down' },
-      { label: 'Average Presence Score', value: `${Math.min(100, Math.max(1, Math.round((Math.log10(total + 1) * 11) + (metrics.sentiment.positive.pct / 3))))}/100`, change: 'Live', tone: 'live' },
-      { label: 'AVE', value: `$${fmt(Math.round(reach * 0.09))}`, change: 'Est.', tone: 'live' },
+      { label: 'Average Presence Score', value: metrics.averagePresenceScore || `${Math.min(100, Math.max(1, Math.round((Math.log10(total + 1) * 11) + (metrics.sentiment.positive.pct / 3))))}/100`, change: metrics.averagePresenceScore ? (isManual ? 'Manual' : 'Live') : 'Est.', tone: 'live' },
+      { label: 'AVE', value: metrics.ave || `$${fmt(Math.round(reach * 0.09))}`, change: metrics.ave ? (isManual ? 'Manual' : 'Live') : 'Est.', tone: 'live' },
       { label: 'Social media reach', value: fmt(socialReach), change: 'Est.', tone: 'live' },
       { label: 'Non-Social media reach', value: fmt(nonSocialReach), change: 'Est.', tone: 'live' },
       { label: 'User generated content', value: fmt(Math.round(total * 0.78)), change: 'Est.', tone: 'live' },
@@ -469,6 +514,7 @@ function socialListeningSnapshot(brand, metrics, demoMode) {
       { label: 'Total social media interactions', value: fmt(Math.round(socialReach * 0.016)), change: 'Est.', tone: 'live' },
     ],
     mentions: DEMO_SOCIAL_LISTENING.mentions.map(m => ({ ...m, title: m.title.replaceAll('EastWest Bank', brand).replaceAll('EastWest', brand.split(' ')[0] || brand) })),
+    sources: sourceCategories,
     sentiment: [
       { name: 'Neutral', pct: pct(neutral, positive + negative + neutral), color: '#dfe3e8' },
       { name: 'Positive', pct: pct(positive, positive + negative + neutral), color: '#10b981' },
@@ -733,11 +779,16 @@ function getSourceStatuses({ hasGrok, competitiveLite }) {
   };
 }
 
-function SourceAttribution({ hasB24, hasGrok, competitiveLite }) {
+function SourceAttribution({ hasB24, hasGrok, competitiveLite, manualVerified, uploadDate }) {
   const statuses = getSourceStatuses({ hasGrok, competitiveLite });
+  const manualLabel = uploadDate ? `Manual · ${new Date(uploadDate).toLocaleDateString()}` : 'Manual Verified';
   return (
     <div style={{ display:'flex', flexWrap:'wrap', gap:5, alignItems:'center', marginTop:7 }}>
-      <SourceBadge label={hasB24 ? 'Brand24 Live' : 'Brand24 Demo'} active={hasB24} note={hasB24 ? 'Verified Metrics from Brand24' : 'Brand24 project not live for this run'} />
+      <SourceBadge
+        label={manualVerified ? manualLabel : hasB24 ? 'Brand24 Live' : 'Brand24 Demo'}
+        active={hasB24 || manualVerified}
+        note={manualVerified ? 'Manually verified data from uploaded Brand24 PDF' : hasB24 ? 'Verified Metrics from Brand24' : 'Brand24 project not live for this run'}
+      />
       <SourceBadge label="Claude" active={statuses.claude.active} note={statuses.claude.note} />
       <SourceBadge label="Grok" active={statuses.grok.active} note={statuses.grok.note} />
       <SourceBadge label="Google AI" active={statuses.gemini.active} note={statuses.gemini.note} />
@@ -789,6 +840,7 @@ function composeReportContext({ brand, period, metrics, context, analysis, compe
   return `
 Brand: ${brand}
 Period: ${period}
+Headline metrics source: ${metrics?.manualVerified ? `Manually verified Brand24 PDF uploaded ${metrics?.manualUploadDate || 'during this run'}` : metrics?.found ? 'Brand24 live MCP pull' : 'No verified Brand24 metrics'}
 Mentions: ${metrics?.mentions?.total ?? 0}
 Daily average: ${metrics?.mentions?.dailyAvg ?? 0}
 Reach: ${fmt(metrics?.totalReach ?? 0)}
@@ -834,19 +886,100 @@ export default function SignalIntel() {
   const [queryError, setQueryError] = useState('');
   const [pdfLoading, setPdfLoading] = useState(false);
   const [pdfError, setPdfError] = useState('');
+  const [uploadLoading, setUploadLoading] = useState(false);
+  const [uploadError, setUploadError] = useState('');
+  const [manualData, setManualData] = useState(null);
 
   const sa = (k, v) => setAgents(p => ({ ...p, [k]: v }));
   const so = (k, v) => setOut(p => ({ ...p, [k]: v }));
   const addC = () => { if (newC.trim() && competitors.length < 7) { setComp(p => [...p, newC.trim()]); setNewC(''); } };
   const done = Object.values(agents).filter(v => v === 'done').length;
+  const setManualField = (key, value) => setManualData(p => ({ ...(p || {}), [key]: value }));
 
-  const run = async () => {
+  const startManualEntry = () => {
+    setUploadError('');
+    setManualData({
+      fileName: 'Manual Brand24 entry',
+      uploadDate: new Date().toISOString(),
+      dateRange: period,
+      totalMentions: '',
+      totalReach: '',
+      positiveMentions: '',
+      neutralMentions: '',
+      negativeMentions: '',
+      positivePct: '',
+      neutralPct: '',
+      negativePct: '',
+      averagePresenceScore: '',
+      ave: '',
+      sourceCategories: [],
+      confidence: 'manual',
+      warnings: ['Manual entry mode: type the Brand24 dashboard/PDF values before confirming.'],
+    });
+  };
+
+  const uploadBrand24Pdf = async e => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setUploadLoading(true);
+    setUploadError('');
+    setManualData(null);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      const response = await fetch('/api/extract-brand24-pdf', { method: 'POST', body: form });
+      const data = await response.json();
+      if (!response.ok || data.error) throw new Error(data.error || `PDF extraction failed with ${response.status}`);
+      const extracted = data.extracted || {};
+      setManualData({
+        fileName: data.fileName || file.name,
+        uploadDate: data.uploadDate || new Date().toISOString(),
+        dateRange: extracted.dateRange || period,
+        totalMentions: extracted.totalMentions ?? '',
+        totalReach: extracted.totalReach ?? '',
+        positiveMentions: extracted.positiveMentions?.count ?? '',
+        neutralMentions: extracted.neutralMentions?.count ?? '',
+        negativeMentions: extracted.negativeMentions?.count ?? '',
+        positivePct: extracted.positiveMentions?.pct ?? '',
+        neutralPct: extracted.neutralMentions?.pct ?? '',
+        negativePct: extracted.negativeMentions?.pct ?? '',
+        averagePresenceScore: extracted.averagePresenceScore || '',
+        ave: extracted.ave || '',
+        sourceCategories: extracted.sourceCategories || [],
+        confidence: extracted.confidence || 'medium',
+        warnings: extracted.warnings || [],
+      });
+    } catch (e) {
+      console.error('[Brand24 PDF upload] error', e);
+      setUploadError(`${e.message} You can still enter the values manually below.`);
+      startManualEntry();
+    } finally {
+      setUploadLoading(false);
+    }
+  };
+
+  const confirmManualAndRun = () => {
+    const required = ['totalMentions', 'totalReach', 'positiveMentions', 'negativeMentions'];
+    const missing = required.filter(key => manualData?.[key] === '' || manualData?.[key] === null || manualData?.[key] === undefined);
+    if (missing.length) {
+      setUploadError(`Please confirm or enter required fields before running: ${missing.join(', ')}.`);
+      return;
+    }
+    if (manualData?.dateRange?.trim()) setPeriod(manualData.dateRange.trim());
+    run(manualData);
+  };
+
+  const run = async (confirmedManualData = null) => {
     setStep('running'); setError(''); setAgents(IDLE); setOut({});
     try {
-      const { startDate, endDate } = parsePeriod(period);
+      const effectivePeriod = confirmedManualData?.dateRange?.trim() || period;
+      const { startDate, endDate } = parsePeriod(effectivePeriod);
 
       sa('listener', 'running');
-      const listenerData = await listenerAgent(brand, startDate, endDate);
+      const listenerData = confirmedManualData
+        ? manualSnapshotToListenerData(confirmedManualData, brand)
+        : await listenerAgent(brand, startDate, endDate);
       so('listenerData', listenerData); sa('listener', 'done');
 
       sa('tracker', 'running');
@@ -855,17 +988,17 @@ export default function SignalIntel() {
       so('metrics', metrics); sa('tracker', 'done');
 
       sa('context', 'running');
-      const context = await contextScoutAgent(brand, competitors, period, startDate, endDate);
+      const context = await contextScoutAgent(brand, competitors, effectivePeriod, startDate, endDate);
       so('context', context); sa('context', 'done');
 
       sa('analyst', 'running');
-      const analysis = await analystAgent(brand, period, metrics, context);
+      const analysis = await analystAgent(brand, effectivePeriod, metrics, context);
       so('analysis', analysis); sa('analyst', 'done');
 
       sa('competitive', 'running');
       const [competitive, competitiveLite] = await Promise.all([
         competitiveIntelAgent(brand, competitors, startDate, endDate, context.grokSignals),
-        competitiveIntelLiteAgent(competitors, period),
+        competitiveIntelLiteAgent(competitors, effectivePeriod),
       ]);
       so('competitive', competitive); sa('competitive', 'done');
       so('competitiveLite', competitiveLite);
@@ -879,9 +1012,10 @@ export default function SignalIntel() {
   };
 
   const { metrics, context, analysis, competitive, competitiveLite, report } = out;
-  const hasB24 = !!metrics?.found;
+  const manualVerified = !!metrics?.manualVerified;
+  const hasB24 = !!metrics?.found && !manualVerified;
   const hasGrok = !!context?.grokSignals;
-  const useEastWestDemo = DEMO_MODE && !hasB24 && brand.toLowerCase().includes('eastwest');
+  const useEastWestDemo = DEMO_MODE && !hasB24 && !manualVerified && brand.toLowerCase().includes('eastwest');
   const displayMetrics = useEastWestDemo ? EASTWEST_DEMO_METRICS : metrics;
   const displaySummary = useEastWestDemo
     ? `${brand} recorded approximately 2,281 mentions from June 22 to July 22, 2026, averaging about 74 mentions per day. Conversation was shaped by the June 25 Garmin Pay launch, the July 9 InstaPay/PESONet fee waiver announcement, and a June 28 reach spike from EastWest Horizons on YouTube. On June 28, only 58 mentions generated 3.4M reach because the EastWest Horizons video drew about 3.0M views while promoting up to Php 100,000 in rewards for opening a savings or checking account.`
@@ -1078,6 +1212,65 @@ Return a concise intelligence summary, recurring themes, specific public posts o
             </div>
           </div>
 
+          <div style={{ background:'#10110c', border:'1px solid #ffda7544', borderRadius:8, padding:16 }}>
+            <div style={{ display:'flex', justifyContent:'space-between', gap:12, alignItems:'flex-start', marginBottom:12 }}>
+              <div>
+                <div style={{ color:'#ffda75', fontSize:10, letterSpacing:'0.15em', textTransform:'uppercase', fontFamily:"'JetBrains Mono',monospace", marginBottom:4 }}>Manual Brand24 PDF fallback</div>
+                <p style={{ color:'#777', fontSize:12, lineHeight:1.6, margin:0 }}>Upload available data here when Brand24 live geo filters are not usable. The pipeline will not run until you confirm the numbers below.</p>
+              </div>
+              <div style={{ display:'flex', gap:8, flexWrap:'wrap', justifyContent:'flex-end' }}>
+                <label style={{ background:'#ffda75', border:'1px solid #ffda75', borderRadius:6, padding:'8px 12px', color:'#111', cursor:uploadLoading?'default':'pointer', fontSize:11, fontWeight:800, whiteSpace:'nowrap' }}>
+                  {uploadLoading ? 'Reading PDF...' : 'Upload PDF'}
+                  <input type="file" accept="application/pdf" onChange={uploadBrand24Pdf} disabled={uploadLoading} style={{ display:'none' }}/>
+                </label>
+                <button type="button" onClick={startManualEntry} style={{ background:'#151515', border:'1px solid #333', borderRadius:6, padding:'8px 12px', color:'#aaa', cursor:'pointer', fontSize:11, whiteSpace:'nowrap' }}>Enter Manually</button>
+              </div>
+            </div>
+
+            {uploadError && <div style={{ color:'#ffb0b0', fontSize:12, lineHeight:1.55, background:'#1a0000', border:'1px solid #ff444433', borderRadius:6, padding:'9px 11px', marginBottom:12 }}>{uploadError}</div>}
+
+            {manualData && (
+              <div style={{ background:'#0b0b0b', border:'1px solid #25200f', borderRadius:8, padding:14 }}>
+                <div style={{ display:'flex', justifyContent:'space-between', gap:10, alignItems:'flex-start', marginBottom:12 }}>
+                  <div>
+                    <div style={{ color:'#f0f0f0', fontSize:14, fontWeight:800, marginBottom:3 }}>Here’s what we read from your PDF</div>
+                    <div style={{ color:'#777', fontSize:11 }}>{manualData.fileName} · Confidence: {manualData.confidence || 'manual'}</div>
+                  </div>
+                  <span style={{ color:'#ffda75', border:'1px solid #ffda7544', borderRadius:999, padding:'3px 8px', fontSize:9, fontFamily:"'JetBrains Mono',monospace", textTransform:'uppercase', whiteSpace:'nowrap' }}>Confirm Required</span>
+                </div>
+                {manualData.warnings?.length > 0 && (
+                  <div style={{ color:'#c9a94b', fontSize:11, lineHeight:1.55, marginBottom:12 }}>
+                    {manualData.warnings.map((w, i) => <div key={i}>• {w}</div>)}
+                  </div>
+                )}
+                <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(150px, 1fr))', gap:10 }}>
+                  {[
+                    ['Date range', 'dateRange', 'text'],
+                    ['Total mentions', 'totalMentions', 'number'],
+                    ['Total reach', 'totalReach', 'number'],
+                    ['Positive count', 'positiveMentions', 'number'],
+                    ['Neutral count', 'neutralMentions', 'number'],
+                    ['Negative count', 'negativeMentions', 'number'],
+                    ['Positive %', 'positivePct', 'number'],
+                    ['Neutral %', 'neutralPct', 'number'],
+                    ['Negative %', 'negativePct', 'number'],
+                    ['Presence Score', 'averagePresenceScore', 'text'],
+                    ['AVE', 'ave', 'text'],
+                  ].map(([label, key, type]) => (
+                    <label key={key} style={{ display:'block' }}>
+                      <span style={{ display:'block', color:'#666', fontSize:9, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:5 }}>{label}</span>
+                      <input type={type} value={manualData[key] ?? ''} onChange={e => setManualField(key, e.target.value)} style={{ width:'100%', background:'#111', border:'1px solid #2a2a2a', borderRadius:6, padding:'9px 10px', color:'#f0f0f0', fontSize:12 }}/>
+                    </label>
+                  ))}
+                </div>
+                <div style={{ display:'flex', justifyContent:'space-between', gap:12, alignItems:'center', marginTop:14, paddingTop:12, borderTop:'1px solid #222' }}>
+                  <p style={{ color:'#777', fontSize:11, lineHeight:1.5, margin:0 }}>Confirm only after checking these against the Brand24 dashboard/PDF. These headline metrics become the verified report numbers.</p>
+                  <button type="button" onClick={confirmManualAndRun} style={{ background:'#ffda75', color:'#111', border:'none', borderRadius:6, padding:'11px 15px', fontSize:12, fontWeight:900, cursor:'pointer', whiteSpace:'nowrap' }}>Confirm & Run →</button>
+                </div>
+              </div>
+            )}
+          </div>
+
           <div style={{ background:'#0a0a0a', border:'1px solid #1a1a1a', borderRadius:8, padding:14 }}>
             <div style={{ color:'#555', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:6, fontFamily:"'JetBrains Mono',monospace" }}>Environment</div>
             <p style={{ color:'#2e2e2e', fontSize:11, fontFamily:"'JetBrains Mono',monospace", lineHeight:1.7 }}>
@@ -1125,9 +1318,14 @@ Return a concise intelligence summary, recurring themes, specific public posts o
             <div style={{ color:LIME, fontFamily:"'JetBrains Mono',monospace", fontSize:10, letterSpacing:'0.18em', marginBottom:6 }}>
               SOCIAL MONITORING REPORT · 6 AGENTS
             </div>
-            <SourceAttribution hasB24={hasB24} hasGrok={hasGrok} competitiveLite={competitiveLite} />
+            <SourceAttribution hasB24={hasB24} hasGrok={hasGrok} competitiveLite={competitiveLite} manualVerified={manualVerified} uploadDate={displayMetrics.manualUploadDate} />
             <h1 style={{ fontFamily:"'Barlow Condensed',sans-serif", fontSize:36, fontWeight:700, margin:'0 0 4px' }}>{brand}</h1>
             <p style={{ color:'#555', fontSize:13, margin:0 }}>{period} · Prepared by Praxis Experiential</p>
+            {manualVerified && (
+              <div style={{ marginTop:8, display:'inline-flex', alignItems:'center', gap:7, background:'#201900', border:'1px solid #ffda7566', borderRadius:6, padding:'6px 9px', color:'#ffda75', fontSize:10, fontFamily:"'JetBrains Mono',monospace", letterSpacing:'0.08em', textTransform:'uppercase' }}>
+                Manually verified data — {displayMetrics.manualUploadDate ? new Date(displayMetrics.manualUploadDate).toLocaleDateString() : 'uploaded this run'}
+              </div>
+            )}
           </div>
           <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:8 }}>
             <div data-pdf-hidden="true" style={{ display:'flex', gap:8, flexWrap:'wrap', justifyContent:'flex-end' }}>
@@ -1157,8 +1355,8 @@ Return a concise intelligence summary, recurring themes, specific public posts o
 
         {/* Metrics */}
         <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, marginBottom:14 }}>
-          <Metric label="Total Mentions" value={fmt(displayMetrics.mentions.total)} sub={hasB24?`Brand24 live · ${displayMetrics.projectName||''}`:useEastWestDemo?'EastWest demo report':'No Brand24 project'}/>
-          <Metric label="Total Reach" value={fmt(displayMetrics.totalReach)} sub="30-day period"/>
+          <Metric label="Total Mentions" value={fmt(displayMetrics.mentions.total)} sub={manualVerified?`Manually verified · ${displayMetrics.manualFileName || 'Brand24 PDF'}`:hasB24?`Brand24 live · ${displayMetrics.projectName||''}`:useEastWestDemo?'EastWest demo report':'No Brand24 project'}/>
+          <Metric label="Total Reach" value={fmt(displayMetrics.totalReach)} sub={manualVerified?'Confirmed Brand24 export':"30-day period"}/>
           <Metric label="Daily Avg" value={displayMetrics.mentions.dailyAvg}/>
         </div>
 
