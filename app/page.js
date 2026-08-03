@@ -1827,7 +1827,7 @@ Return a concise intelligence summary, recurring themes, specific public posts o
 
         {/* Footer */}
         <div style={{ paddingTop:14, borderTop:'1px solid #141414', display:'flex', justifyContent:'space-between' }}>
-          <span style={{ color:'#2a2a2a', fontSize:11, fontFamily:"'JetBrains Mono',monospace" }}>// Brand24 MCP + Grok · {hasB24?'Live data':'Set up Brand24 project for live data'}</span>
+          <span style={{ color:'#2a2a2a', fontSize:11, fontFamily:"'JetBrains Mono',monospace" }}>// Brand24 MCP + Grok · {hasB24?'Live primary data':manualVerified?'Manual primary + live competitor data':'Set up Brand24 project for live data'}</span>
           <span style={{ color:'#2a2a2a', fontSize:11 }}>Signal Intel v3 · Praxis Experiential</span>
         </div>
 
