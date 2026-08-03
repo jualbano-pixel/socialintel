@@ -32,9 +32,11 @@ function numberFrom(value) {
 function pctFrom(value) {
   if (value === null || value === undefined || value === '') return null;
   if (typeof value === 'number' && Number.isFinite(value)) return Number(value.toFixed(1));
-  const match = String(value).match(/-?[\d,.]+/);
+  const text = String(value);
+  const pctMatch = text.match(/(-?[\d,.]+)\s*%/);
+  const match = pctMatch || text.match(/-?[\d,.]+/);
   if (!match) return null;
-  return Number(Number(match[0].replace(/,/g, '')).toFixed(1));
+  return Number(Number((pctMatch ? pctMatch[1] : match[0]).replace(/,/g, '')).toFixed(1));
 }
 
 function normalizeExtracted(data) {
@@ -64,6 +66,8 @@ function normalizeExtracted(data) {
     averagePresenceScore: String(data.averagePresenceScore || '').trim(),
     ave: String(data.ave || '').trim(),
     sourceCategories: Array.isArray(data.sourceCategories) ? data.sourceCategories : [],
+    topMentions: Array.isArray(data.topMentions) ? data.topMentions : [],
+    sourceNarrative: String(data.sourceNarrative || '').trim(),
     confidence: String(data.confidence || 'medium').toLowerCase(),
     warnings: Array.isArray(data.warnings) ? data.warnings : [],
   };
@@ -117,10 +121,40 @@ function fallbackExtractFromText(text) {
     dateRange: textNearLabel(text, 'Date range'),
     averagePresenceScore: textNearLabel(text, 'Average Presence Score'),
     ave: textNearLabel(text, 'AVE'),
-    sourceCategories: [],
+    sourceCategories: fallbackSourceCategories(text),
+    topMentions: fallbackTopMentions(text),
+    sourceNarrative: '',
     confidence: 'low',
     warnings: ['Claude extraction was unavailable; fields were prefilled from Brand24 text labels. Confirm every value before running.'],
   });
+}
+
+function fallbackSourceCategories(text) {
+  const known = ['TikTok', 'News', 'Videos', 'X (Twitter)', 'Facebook', 'Instagram', 'YouTube', 'Blogs', 'Web', 'Podcasts'];
+  return known.map(name => {
+    const value = valueNearLabel(text, name);
+    if (!value) return null;
+    return { name, count: numberFrom(value), pct: pctFrom(value) };
+  }).filter(Boolean);
+}
+
+function fallbackTopMentions(text) {
+  const topSection = text.match(/Top mentions?\s+([\s\S]{0,5000})/i)?.[1] || '';
+  if (!topSection) return [];
+  return topSection
+    .split(/\n+/)
+    .map(line => line.trim())
+    .filter(line => line.length > 12)
+    .slice(0, 6)
+    .map((line, i) => ({
+      source: line.match(/\b(tiktok|instagram|facebook|x\.com|twitter|youtube|news|web)\b/i)?.[0] || 'Brand24 PDF',
+      title: line.slice(0, 90),
+      meta: '',
+      sentiment: line.match(/\bpositive\b/i) ? 'Positive' : line.match(/\bnegative\b/i) ? 'Negative' : 'Neutral',
+      text: line,
+      icon: `M${i + 1}`,
+      color: '#2f86de',
+    }));
 }
 
 function parseWithPdf2Json(buffer) {
@@ -220,11 +254,14 @@ Return ONLY valid JSON in this exact shape:
   "averagePresenceScore": "as printed or empty",
   "ave": "as printed or empty",
   "sourceCategories": [{"name": "TikTok", "count": 0, "pct": 0}],
+  "topMentions": [{"source":"tiktok.com","title":"author or headline","meta":"engagement/date as printed","sentiment":"Positive|Neutral|Negative","text":"short mention excerpt or description"}],
+  "sourceNarrative": "one non-technical sentence describing the dominant source mix from the PDF",
   "confidence": "high|medium|low",
   "warnings": ["short warning for any unclear or missing field"]
 }
 
 Use Brand24 labels such as Total mentions, Total reach, Positive mentions, Negative mentions, Average Presence Score, and AVE. If a value is missing or ambiguous, use null and add a warning. Do not invent numbers.
+Extract Top Mentions only from the uploaded PDF text. Do not reuse examples from another brand.
 
 PDF TEXT:
 ${extractedText.slice(0, 45000)}`,
