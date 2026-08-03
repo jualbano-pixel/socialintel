@@ -20,6 +20,22 @@ function parseJSON(text, fallback = {}) {
   return fallback;
 }
 
+function buildFallbackResponse({ file, extractedText, diagnostics, warning }) {
+  const fallback = fallbackExtractFromText(extractedText);
+  diagnostics.push(warning.diagnostic);
+  fallback.warnings = [
+    warning.message,
+    ...fallback.warnings,
+  ];
+  return Response.json({
+    fileName: file.name || 'Brand24 export.pdf',
+    uploadDate: new Date().toISOString(),
+    extracted: fallback,
+    diagnostics,
+    textPreview: extractedText.slice(0, 1200),
+  });
+}
+
 function numberFrom(value) {
   if (value === null || value === undefined || value === '') return null;
   if (typeof value === 'number' && Number.isFinite(value)) return Math.round(value);
@@ -238,12 +254,14 @@ export async function POST(request) {
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
-        max_tokens: 900,
+        max_tokens: 2500,
         messages: [{
           role: 'user',
           content: `Extract Brand24 dashboard PDF metrics from the text below.
 
-Return ONLY valid JSON in this exact shape:
+Your entire response must be one valid JSON object. Do not include markdown, prose, code fences, analysis, or trailing commentary. If a field is not cleanly extractable, use null, an empty string, or an empty array inside the JSON.
+
+Return this exact JSON shape:
 {
   "totalMentions": 0,
   "totalReach": 0,
@@ -278,27 +296,50 @@ ${extractedText.slice(0, 45000)}`,
       textPreview: parseClaudeText(data)?.slice(0, 500) || '',
     });
     if (!response.ok || data.error) {
-      const fallback = fallbackExtractFromText(extractedText);
-      diagnostics.push('fallback=label-parser-after-claude-error');
-      fallback.warnings = [
-        `Claude extraction failed: ${data.error?.message || data.error || response.status}.`,
-        ...fallback.warnings,
-      ];
-      return Response.json({
-        fileName: file.name || 'Brand24 export.pdf',
-        uploadDate: new Date().toISOString(),
-        extracted: fallback,
+      return buildFallbackResponse({
+        file,
+        extractedText,
         diagnostics,
-        textPreview: extractedText.slice(0, 1200),
+        warning: {
+          diagnostic: 'fallback=label-parser-after-claude-error',
+          message: `Claude extraction failed: ${data.error?.message || data.error || response.status}.`,
+        },
       });
     }
 
     const claudeText = parseClaudeText(data);
     diagnostics.push(`claudeTextChars=${claudeText?.length || 0}`);
+    diagnostics.push(`claudeRawPreview=${String(claudeText || '').slice(0, 500).replace(/\s+/g, ' ')}`);
     const raw = parseJSON(claudeText, {});
     diagnostics.push(`jsonKeys=${Object.keys(raw).join(', ') || 'none'}`);
     console.log('[Brand24 PDF extract] parsed JSON keys', Object.keys(raw));
+    if (!Object.keys(raw).length) {
+      console.warn('[Brand24 PDF extract] Claude returned non-JSON text', {
+        chars: claudeText?.length || 0,
+        preview: String(claudeText || '').slice(0, 1200),
+      });
+      return buildFallbackResponse({
+        file,
+        extractedText,
+        diagnostics,
+        warning: {
+          diagnostic: 'fallback=label-parser-after-non-json-claude-response',
+          message: 'Claude returned a non-JSON extraction response. Core fields were prefilled from Brand24 text labels instead.',
+        },
+      });
+    }
     const extracted = normalizeExtracted(raw);
+    const labelFallback = fallbackExtractFromText(extractedText);
+    if (extracted.totalMentions === null) extracted.totalMentions = labelFallback.totalMentions;
+    if (extracted.totalReach === null) extracted.totalReach = labelFallback.totalReach;
+    if (extracted.positiveMentions.count === null) extracted.positiveMentions = labelFallback.positiveMentions;
+    if (extracted.neutralMentions.count === null) extracted.neutralMentions = labelFallback.neutralMentions;
+    if (extracted.negativeMentions.count === null) extracted.negativeMentions = labelFallback.negativeMentions;
+    if (!extracted.dateRange) extracted.dateRange = labelFallback.dateRange;
+    if (!extracted.averagePresenceScore) extracted.averagePresenceScore = labelFallback.averagePresenceScore;
+    if (!extracted.ave) extracted.ave = labelFallback.ave;
+    if (!extracted.sourceCategories.length) extracted.sourceCategories = labelFallback.sourceCategories;
+    if (!extracted.topMentions.length) extracted.topMentions = labelFallback.topMentions;
     const requiredMissing = [
       ['Total mentions', extracted.totalMentions],
       ['Total reach', extracted.totalReach],

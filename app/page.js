@@ -952,10 +952,10 @@ Known demo context: ${demoContext || 'n/a'}
 export default function SignalIntel() {
   const reportRef = useRef(null);
   const [step, setStep] = useState('setup');
-  const [brand, setBrand] = useState('EastWest Bank');
-  const [competitors, setComp] = useState(['BPI','BDO','UnionBank','Metrobank','Security Bank']);
+  const [brand, setBrand] = useState('');
+  const [competitors, setComp] = useState([]);
   const [newC, setNewC] = useState('');
-  const [period, setPeriod] = useState('June 22–July 22, 2026');
+  const [period, setPeriod] = useState('');
   const [agents, setAgents] = useState(IDLE);
   const [out, setOut] = useState({});
   const [error, setError] = useState('');
@@ -1102,7 +1102,9 @@ export default function SignalIntel() {
   const run = async (confirmedManualData = null) => {
     setStep('running'); setError(''); setAgents(IDLE); setOut({});
     try {
+      if (!brand.trim()) throw new Error('Enter a client / brand before running.');
       const effectivePeriod = confirmedManualData?.dateRange?.trim() || period;
+      if (!effectivePeriod.trim()) throw new Error('Enter a reporting period or upload a PDF with a readable date range before running.');
       const { startDate, endDate } = parsePeriod(effectivePeriod);
 
       sa('listener', 'running');
@@ -1301,11 +1303,11 @@ Return a concise intelligence summary, recurring themes, specific public posts o
         <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
           <div>
             <label style={{ display:'block', color:'#666', fontSize:10, letterSpacing:'0.15em', textTransform:'uppercase', marginBottom:8 }}>Client / Brand</label>
-            <input value={brand} onChange={e => setBrand(e.target.value)} style={{ width:'100%', background:'#111', border:'1px solid #222', borderRadius:6, padding:'12px 14px', color:'#f0f0f0', fontSize:15 }}/>
+            <input value={brand} onChange={e => setBrand(e.target.value)} placeholder="e.g. Netflix Philippines" style={{ width:'100%', background:'#111', border:'1px solid #222', borderRadius:6, padding:'12px 14px', color:'#f0f0f0', fontSize:15 }}/>
           </div>
           <div>
             <label style={{ display:'block', color:'#666', fontSize:10, letterSpacing:'0.15em', textTransform:'uppercase', marginBottom:8 }}>Reporting Period</label>
-            <input value={period} onChange={e => setPeriod(e.target.value)} style={{ width:'100%', background:'#111', border:'1px solid #222', borderRadius:6, padding:'12px 14px', color:'#f0f0f0', fontSize:15 }}/>
+            <input value={period} onChange={e => setPeriod(e.target.value)} placeholder="e.g. July 3-August 2, 2026" style={{ width:'100%', background:'#111', border:'1px solid #222', borderRadius:6, padding:'12px 14px', color:'#f0f0f0', fontSize:15 }}/>
           </div>
           <div>
             <label style={{ display:'block', color:'#666', fontSize:10, letterSpacing:'0.15em', textTransform:'uppercase', marginBottom:8 }}>Competitors <span style={{ color:'#333' }}>({competitors.length}/7)</span></label>
@@ -1334,7 +1336,7 @@ Return a concise intelligence summary, recurring themes, specific public posts o
               <a href="https://app.brand24.com" target="_blank" rel="noreferrer" style={{ background:'#161616', border:`1px solid ${LIME}44`, borderRadius:6, padding:'7px 12px', color:LIME, fontSize:11, textDecoration:'none', whiteSpace:'nowrap' }}>Open Brand24 →</a>
             </div>
             <div style={{ display:'flex', flexDirection:'column', gap:5 }}>
-              {[brand, ...competitors].map((b,i) => (
+              {[brand, ...competitors].filter(Boolean).map((b,i) => (
                 <div key={i} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', background:'#111', borderRadius:5, padding:'7px 10px' }}>
                   <div style={{ display:'flex', alignItems:'center', gap:7 }}>
                     <div style={{ width:5, height:5, borderRadius:'50%', background:i===0?LIME:'#333' }}/>
@@ -1344,6 +1346,11 @@ Return a concise intelligence summary, recurring themes, specific public posts o
                   <span style={{ color:'#2a2a2a', fontSize:10, fontFamily:"'JetBrains Mono',monospace" }}>needs Brand24 project</span>
                 </div>
               ))}
+              {![brand, ...competitors].filter(Boolean).length && (
+                <div style={{ background:'#111', borderRadius:5, padding:'9px 10px', color:'#555', fontSize:12 }}>
+                  Add a brand or upload a Brand24 PDF to begin.
+                </div>
+              )}
             </div>
           </div>
 
