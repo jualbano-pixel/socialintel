@@ -542,28 +542,66 @@ async function competitiveIntelLiteAgent(competitors, dateRange) {
   }
 }
 
+function groundedReportFallback(brand, analysis, competitive) {
+  const foundRows = competitive?.sovData?.filter(row => row.found) || [];
+  const client = foundRows.find(row => row.isClient);
+  const competitors = foundRows.filter(row => !row.isClient).sort((a, b) => (Number(b.mentions) || 0) - (Number(a.mentions) || 0));
+  const leader = competitors[0];
+  const manualRows = competitors.filter(row => row.manualVerified || row.sourceLabel);
+  const leaderLine = leader
+    ? `${leader.brand} leads the verified competitive set at ${leader.percentage}% SOV from ${fmt(leader.mentions)} mentions.`
+    : 'No live competitor rows were available for comparison.';
+  const clientLine = client
+    ? `${brand} holds ${client.percentage}% SOV from ${fmt(client.mentions)} manually verified mentions.`
+    : `${brand} has manually verified primary metrics, but no client SOV row was available.`;
+  const manualLine = manualRows.length
+    ? `${manualRows.map(row => `${row.brand} is manually verified at ${fmt(row.mentions)} mentions`).join('; ')} and should not be treated as a live Brand24 pull.`
+    : 'All competitor rows shown are live Brand24 pulls unless otherwise labeled.';
+  return {
+    positiveThemes: [
+      analysis?.spikeDrivers?.[0] || 'Primary positive lift came from the named spike driver identified in the analyst summary.',
+      clientLine,
+    ],
+    negativeThemes: [
+      leader ? `${brand} trails ${leader.brand} by verified SOV, creating a visibility gap that should be addressed in the next content cycle.` : 'Competitive visibility could not be benchmarked against a verified leader in this run.',
+      manualLine,
+    ],
+    scamRiskAlert: null,
+    recommendations: [
+      `${leaderLine} Prioritize always-on local content marketing and creator seeding to close that visibility gap.`,
+      `${clientLine} Use the manually verified Netflix snapshot as the headline baseline and keep competitor sourcing labels visible in any client export.`,
+      manualRows.length
+        ? `Keep the Amazon Prime override in place until the Brand24 PH project/API issue is resolved; do not use the unfiltered live pull for Amazon Prime comparisons.`
+        : `Use the Brand24 competitor rows to set weekly share-of-voice guardrails and investigate any competitor spikes above Netflix's current baseline.`,
+    ],
+  };
+}
+
 async function reportBuilderAgent(brand, analysis, competitive, context, competitiveLite) {
   const directionalIntel = competitiveLite?.competitors
     ?.map(c => `${c.competitor}: ${clientSafeText(c.synthesis)}`)
     .filter(line => !line.includes('No comparative data available'))
     .join('\n\n') || 'none';
+  const verifiedCompetitiveMetrics = competitive?.sovData
+    ?.map(s => `${s.brand}: ${s.found ? `${s.percentage}% SOV from ${s.mentions} mentions${s.manualVerified || s.sourceLabel ? ` (${s.sourceLabel || 'Manual'} verified)` : ''}` : 'no Brand24 project'}`)
+    .join(' | ') || 'none';
+  const competitorNotes = competitive?.competitorNotes
+    ?.map(note => `${note.brand}: ${note.observation}`)
+    .join(' | ') || 'none';
   return await claude(
     `Final synthesizer for ${brand}.
 SUMMARY: ${analysis.executiveSummary}
 DRIVERS: ${analysis.spikeDrivers?.join(' | ')}
 THEMES: ${context.themes?.join(', ')}
 GROK SIGNALS: ${context.grokSignals?.substring(0, 400) || 'none'}
-BRAND24 VERIFIED COMPETITIVE METRICS: ${competitive?.sovData?.map(s => `${s.brand}: ${s.found ? `${s.percentage}% SOV from ${s.mentions} mentions` : 'no Brand24 project'}`).join(' | ') || 'none'}
+BRAND24 VERIFIED COMPETITIVE METRICS: ${verifiedCompetitiveMetrics}
+COMPETITOR INTELLIGENCE NOTES: ${competitorNotes}
 DIRECTIONAL COMPETITOR INTEL (AI-native sources, not audited Brand24 data): ${directionalIntel.substring(0, 1200)}
+Use the verified competitive metrics and notes directly. Do not return generic banking, partnership, service-delivery, or registration boilerplate unless those topics appear above.
 Return valid JSON:
 {"positiveThemes":["specific theme with evidence","specific theme"],"negativeThemes":["specific theme with evidence","specific theme"],"scamRiskAlert":"1 sentence if fraud signals present, otherwise null","recommendations":["specific actionable rec tied to data","specific rec","specific rec"]}`,
-    500,
-    {
-      positiveThemes: ['Partnership announcements driving positive brand associations', 'Product launches generating organic engagement across platforms'],
-      negativeThemes: ['Service delivery issues generating complaint threads', 'Registration and onboarding friction surfacing in forums'],
-      scamRiskAlert: null,
-      recommendations: ['Activate community management for high-engagement complaint threads within 2 hours', 'Amplify partnership content on TikTok and news channels to extend positive SOV', 'Monitor competitor sentiment shifts for real-time positioning opportunities'],
-    }
+    900,
+    groundedReportFallback(brand, analysis, competitive)
   );
 }
 
