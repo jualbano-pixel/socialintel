@@ -20,6 +20,23 @@ const BRAND24_PROJECT_ALIASES = {
   vivaone: ['viva one', 'viva one philippines'],
   'viva one': ['vivaone', 'viva one philippines'],
 };
+const MANUAL_COMPETITOR_OVERRIDES = [
+  {
+    primaryBrand: 'netflix',
+    competitor: 'amazon prime',
+    displayBrand: 'Amazon Prime Video Philippines',
+    mentions: 38,
+    totalReach: 130000,
+    positiveMentions: 5,
+    negativeMentions: 0,
+    averagePresenceScore: '51/100',
+    ave: '$11K',
+    sourceLabel: 'Manual',
+    manualVerified: true,
+    projectName: 'Amazon Prime Video · Brand24 dashboard geo filter: Philippines',
+    observation: 'Amazon Prime Video Philippines was manually verified from the Brand24 dashboard PH geolocation view: 38 mentions, 130K reach, 5 positive mentions, and 0 negative mentions.',
+  },
+];
 
 // ── JSON parser ───────────────────────────────────────────────
 function parseJSON(text, fallback = {}) {
@@ -59,6 +76,13 @@ function sameBrandName(a, b) {
 
 function defaultCompetitorsForBrand(brand) {
   return brandKey(brand).includes('netflix') ? NETFLIX_STREAMING_COMPETITORS : [];
+}
+
+function manualCompetitorOverride(primaryBrand, competitor) {
+  return MANUAL_COMPETITOR_OVERRIDES.find(override =>
+    brandKey(primaryBrand).includes(override.primaryBrand) &&
+    sameBrandName(competitor, override.competitor)
+  ) || null;
 }
 
 async function pullBrand24CompetitorRow(competitor, startDate, endDate) {
@@ -357,7 +381,18 @@ async function competitiveIntelAgent(brand, competitors, startDate, endDate, gro
     console.log('[Competitive Intel] manual/PDF path resolving competitors sequentially', { brand, competitors, startDate, endDate });
     const competitorRows = [];
     for (const competitor of competitors) {
-      competitorRows.push(await pullBrand24CompetitorRow(competitor, startDate, endDate));
+      const override = manualCompetitorOverride(brand, competitor);
+      if (override) {
+        competitorRows.push({
+          ...override,
+          brand: override.displayBrand || competitor,
+          percentage: 0,
+          isClient: false,
+          found: true,
+        });
+      } else {
+        competitorRows.push(await pullBrand24CompetitorRow(competitor, startDate, endDate));
+      }
     }
     const clientRow = {
       brand,
@@ -386,6 +421,7 @@ async function competitiveIntelAgent(brand, competitors, startDate, endDate, gro
         projectName: row.projectName || '',
         projectId: row.projectId || '',
         mentions: row.mentions || 0,
+        sourceLabel: row.sourceLabel || (row.manualVerified ? 'Manual' : 'Brand24'),
         availableProjects: row.availableProjects || [],
       })),
     };
@@ -592,12 +628,17 @@ function SentBar({ label, count, pct, color, onClick }) {
   );
 }
 
-function SOVRow({ brand, percentage, mentions, isClient, found }) {
+function SOVRow({ brand, percentage, mentions, isClient, found, manualVerified, sourceLabel }) {
   return (
     <div style={{ marginBottom:10 }}>
       <div style={{ display:'flex', justifyContent:'space-between', marginBottom:4 }}>
         <span style={{ color:isClient?LIME:'#aaa', fontSize:12, fontWeight:isClient?700:400 }}>
           {isClient?'▶ ':''}{brand}
+          {(manualVerified || sourceLabel) && found && (
+            <span style={{ color:'#ffda75', border:'1px solid #ffda7544', borderRadius:4, padding:'1px 5px', fontSize:9, marginLeft:6, fontFamily:"'JetBrains Mono',monospace", textTransform:'uppercase' }}>
+              {sourceLabel || 'Manual'}
+            </span>
+          )}
           {!found && <span style={{ color:'#444', fontSize:10, marginLeft:6, fontFamily:"'JetBrains Mono',monospace" }}>no project</span>}
         </span>
         <span style={{ color:'#555', fontSize:11, fontFamily:"'JetBrains Mono',monospace" }}>{found?`${percentage}% · ${mentions||0}`:'—'}</span>
