@@ -6,6 +6,15 @@ const CLAUDE_MODEL = 'claude-sonnet-4-6';
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
 const fmt = n => n >= 1e9 ? `${(n/1e9).toFixed(1)}B` : n >= 1e6 ? `${(n/1e6).toFixed(1)}M` : n >= 1e3 ? `${(n/1e3).toFixed(1)}K` : String(n || 0);
 const CARD = { background: '#111', border: '1px solid #1e1e1e', borderRadius: 10, padding: '18px 22px' };
+const NETFLIX_STREAMING_COMPETITORS = ['Viu Philippines', 'Amazon Prime', 'HBO Max', 'iWant', 'Viva One'];
+const BRAND24_PROJECT_ALIASES = {
+  'netflix philippines': ['netflix'],
+  'viu philippines': ['viu'],
+  'amazon prime': ['prime video', 'prime video philippines', 'amazon prime video', 'amazon prime philippines'],
+  'hbo max': ['hbo max philippines', 'max philippines', 'hbo go', 'hbo go philippines'],
+  iwant: ['iwanttfc', 'iwant tfc', 'iwant philippines'],
+  'viva one': ['vivaone', 'viva one philippines'],
+};
 
 // ── JSON parser ───────────────────────────────────────────────
 function parseJSON(text, fallback = {}) {
@@ -19,6 +28,32 @@ function parseJSON(text, fallback = {}) {
 
 function parseClaudeText(data) {
   return data?.content?.[0]?.text ?? data?.content?.find?.(b => b.type === 'text')?.text ?? null;
+}
+
+function brandKey(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/\bphilippines\b/g, '')
+    .replace(/\bph\b/g, '')
+    .replace(/\bvideo\b/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function brandAliases(value) {
+  const raw = String(value || '').toLowerCase().trim();
+  const aliases = BRAND24_PROJECT_ALIASES[raw] || BRAND24_PROJECT_ALIASES[brandKey(raw)] || [];
+  return [value, ...aliases].map(brandKey).filter(Boolean);
+}
+
+function sameBrandName(a, b) {
+  const aKeys = brandAliases(a);
+  const bKeys = brandAliases(b);
+  return aKeys.some(x => bKeys.some(y => x === y || x.includes(y) || y.includes(x)));
+}
+
+function defaultCompetitorsForBrand(brand) {
+  return brandKey(brand).includes('netflix') ? NETFLIX_STREAMING_COMPETITORS : [];
 }
 
 function parseGrokText(data) {
@@ -268,23 +303,34 @@ Return valid JSON — name specific events from Brand24 and Grok:
 
 async function competitiveIntelAgent(brand, competitors, startDate, endDate, grokSignals, manualClientMetrics = null) {
   const brandsToPull = manualClientMetrics ? competitors : [brand, ...competitors];
+  const aliasHints = brandsToPull
+    .map(name => {
+      const aliases = BRAND24_PROJECT_ALIASES[String(name || '').toLowerCase().trim()] || BRAND24_PROJECT_ALIASES[brandKey(name)] || [];
+      return aliases.length ? `${name}: ${aliases.join(', ')}` : null;
+    })
+    .filter(Boolean)
+    .join('\n');
+  console.log('[Competitive Intel] Brand24 project resolution request', { brand, competitors, brandsToPull, startDate, endDate, manualClient: !!manualClientMetrics, aliasHints });
   const text = await claudeB24(
     `You have Brand24 social listening tools.
 Get total mention counts from ${startDate} to ${endDate} for: ${brandsToPull.join(', ')}
-For each: find Brand24 project, get stats using brand24_project_stats response_format="json", sum mentionsCount.
+For each: first list projects using brand24_get_projects, then find the best matching Brand24 project by exact, partial, or alias match. Use these alias hints when present:
+${aliasHints || 'No additional alias hints.'}
+Then get stats using brand24_project_stats response_format="json" and sum mentionsCount.
 Calculate SOV percentages. Brands without projects: found=false.
 ${grokSignals ? `Grok competitor signals: ${grokSignals.substring(0, 400)}` : ''}
 Return ONLY valid JSON:
 {"sovData":[{"brand":"${brand}","mentions":1216,"percentage":35.7,"isClient":true,"found":true},{"brand":"${competitors[0] || 'BPI'}","mentions":0,"percentage":0,"isClient":false,"found":false}],"competitorNotes":[{"brand":"${competitors[0] || 'BPI'}","observation":"specific observation from Brand24 data or Grok signals"}]}`
   );
   const data = parseJSON(text, { sovData: getMockSov(brand, competitors), competitorNotes: [] });
+  console.log('[Competitive Intel] Brand24 project resolution response', { rawPreview: text.slice(0, 1200), parsed: data });
   if (!data.sovData?.length) data.sovData = getMockSov(brand, competitors);
   if (!manualClientMetrics) return data;
 
   const competitorRows = competitors.map(name => {
-    const row = data.sovData.find(s => String(s.brand || '').toLowerCase() === name.toLowerCase());
+    const row = data.sovData.find(s => sameBrandName(s.brand, name));
     return row || { brand: name, mentions: 0, percentage: 0, isClient: false, found: false };
-  }).map(row => ({ ...row, isClient: false }));
+  }).map((row, index) => ({ ...row, brand: competitors[index], isClient: false }));
   const clientRow = {
     brand,
     mentions: manualClientMetrics.mentions.total,
@@ -301,6 +347,17 @@ Return ONLY valid JSON:
       ...row,
       percentage: row.found ? Number((((Number(row.mentions) || 0) / total) * 100).toFixed(1)) : 0,
     })),
+    competitorNotes: data.competitorNotes?.length
+      ? data.competitorNotes.map(note => {
+        const matchedName = competitors.find(name => sameBrandName(note.brand, name));
+        return matchedName ? { ...note, brand: matchedName } : note;
+      })
+      : competitorRows
+        .filter(row => row.found)
+        .map(row => ({
+          brand: row.brand,
+          observation: `${row.brand} registered ${fmt(row.mentions)} Brand24 mentions in the same period; use this verified count for directional comparison against ${brand}.`,
+        })),
   };
 }
 
@@ -1105,6 +1162,8 @@ export default function SignalIntel() {
       if (!brand.trim()) throw new Error('Enter a client / brand before running.');
       const effectivePeriod = confirmedManualData?.dateRange?.trim() || period;
       if (!effectivePeriod.trim()) throw new Error('Enter a reporting period or upload a PDF with a readable date range before running.');
+      const activeCompetitors = competitors.length ? competitors : (confirmedManualData ? defaultCompetitorsForBrand(brand) : []);
+      if (confirmedManualData && !competitors.length && activeCompetitors.length) setComp(activeCompetitors);
       const { startDate, endDate } = parsePeriod(effectivePeriod);
 
       sa('listener', 'running');
@@ -1120,8 +1179,8 @@ export default function SignalIntel() {
 
       sa('context', 'running');
       const context = confirmedManualData
-        ? await manualContextScoutAgent(brand, competitors, effectivePeriod)
-        : await contextScoutAgent(brand, competitors, effectivePeriod, startDate, endDate);
+        ? await manualContextScoutAgent(brand, activeCompetitors, effectivePeriod)
+        : await contextScoutAgent(brand, activeCompetitors, effectivePeriod, startDate, endDate);
       so('context', context); sa('context', 'done');
 
       sa('analyst', 'running');
@@ -1129,9 +1188,9 @@ export default function SignalIntel() {
       so('analysis', analysis); sa('analyst', 'done');
 
       sa('competitive', 'running');
-      const competitive = await competitiveIntelAgent(brand, competitors, startDate, endDate, context.grokSignals, confirmedManualData ? metrics : null);
-      const missingCompetitors = competitors.filter(name => {
-        const row = competitive.sovData?.find(s => String(s.brand || '').toLowerCase() === name.toLowerCase());
+      const competitive = await competitiveIntelAgent(brand, activeCompetitors, startDate, endDate, context.grokSignals, confirmedManualData ? metrics : null);
+      const missingCompetitors = activeCompetitors.filter(name => {
+        const row = competitive.sovData?.find(s => sameBrandName(s.brand, name));
         return !row?.found;
       });
       const competitiveLite = missingCompetitors.length
