@@ -113,12 +113,15 @@ async function claudeText(prompt, maxTokens = 700, label = 'Ask AI') {
   return text;
 }
 
-async function claudeB24(prompt, maxTokens = 1500) {
+async function claudeB24(prompt, maxTokens = 2200) {
   try {
     const r = await fetch('/api/claude-b24', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: CLAUDE_MODEL, max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] }) });
     const data = await r.json();
-    return data.content?.filter(b => b.type === 'text').map(b => b.text).join('') ?? '';
+    if (!r.ok || data.error) console.warn('Claude+B24 API error:', data.error || r.status);
+    const text = data.content?.filter(b => b.type === 'text').map(b => b.text).join('') ?? '';
+    if (!text) console.warn('Claude+B24 empty text response:', data);
+    return text;
   } catch(e) { console.warn('Claude+B24:', e.message); return ''; }
 }
 
@@ -327,10 +330,43 @@ Return ONLY valid JSON:
   if (!data.sovData?.length) data.sovData = getMockSov(brand, competitors);
   if (!manualClientMetrics) return data;
 
-  const competitorRows = competitors.map(name => {
+  let competitorRows = competitors.map(name => {
     const row = data.sovData.find(s => sameBrandName(s.brand, name));
     return row || { brand: name, mentions: 0, percentage: 0, isClient: false, found: false };
   }).map((row, index) => ({ ...row, brand: competitors[index], isClient: false }));
+  const missingRows = competitorRows.filter(row => !row.found);
+  if (missingRows.length) {
+    const recoveredRows = await Promise.all(missingRows.map(async row => {
+      const aliases = BRAND24_PROJECT_ALIASES[String(row.brand || '').toLowerCase().trim()] || BRAND24_PROJECT_ALIASES[brandKey(row.brand)] || [];
+      const retryText = await claudeB24(
+        `You have Brand24 social listening tools.
+Resolve exactly one Brand24 project for competitor "${row.brand}".
+Alias/project-name hints: ${aliases.length ? aliases.join(', ') : 'none'}.
+Steps:
+1. Call brand24_get_projects.
+2. Select the best exact, partial, or alias-matched project for "${row.brand}".
+3. If a project is found, call brand24_project_stats from ${startDate} to ${endDate} with response_format="json".
+4. Sum mentionsCount over the returned daily stats.
+Return ONLY valid JSON in this shape:
+{"brand":"${row.brand}","found":true,"projectName":"matched project name","projectId":123,"mentions":0,"observation":"one sentence about verified Brand24 mention volume"}
+If no matching project exists, return:
+{"brand":"${row.brand}","found":false,"searchedFor":"${row.brand}","availableProjects":["project names checked"]}`,
+        1200
+      );
+      const retry = parseJSON(retryText, {});
+      console.log('[Competitive Intel] per-competitor recovery response', { competitor: row.brand, rawPreview: retryText.slice(0, 800), parsed: retry });
+      if (!retry?.found) return row;
+      return {
+        ...row,
+        ...retry,
+        brand: row.brand,
+        mentions: Number(retry.mentions ?? retry.totalMentions ?? retry.mentionsCount) || 0,
+        found: true,
+        isClient: false,
+      };
+    }));
+    competitorRows = competitorRows.map(row => recoveredRows.find(recovered => sameBrandName(recovered.brand, row.brand) && recovered.found) || row);
+  }
   const clientRow = {
     brand,
     mentions: manualClientMetrics.mentions.total,
