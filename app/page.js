@@ -9,10 +9,15 @@ const CARD = { background: '#111', border: '1px solid #1e1e1e', borderRadius: 10
 const NETFLIX_STREAMING_COMPETITORS = ['Viu Philippines', 'Amazon Prime', 'HBO Max', 'iWant', 'Viva One'];
 const BRAND24_PROJECT_ALIASES = {
   'netflix philippines': ['netflix'],
+  viu: ['viu philippines'],
   'viu philippines': ['viu'],
+  'amazon prime video philippines': ['amazon prime', 'prime video', 'prime video philippines', 'amazon prime video', 'amazon prime philippines'],
   'amazon prime': ['prime video', 'prime video philippines', 'amazon prime video', 'amazon prime philippines'],
+  'hbo max philippines': ['hbo max', 'max philippines', 'hbo go', 'hbo go philippines'],
   'hbo max': ['hbo max philippines', 'max philippines', 'hbo go', 'hbo go philippines'],
+  'iwant tv': ['iwant', 'iwanttfc', 'iwant tfc', 'iwant philippines'],
   iwant: ['iwanttfc', 'iwant tfc', 'iwant philippines'],
+  vivaone: ['viva one', 'viva one philippines'],
   'viva one': ['vivaone', 'viva one philippines'],
 };
 
@@ -54,6 +59,49 @@ function sameBrandName(a, b) {
 
 function defaultCompetitorsForBrand(brand) {
   return brandKey(brand).includes('netflix') ? NETFLIX_STREAMING_COMPETITORS : [];
+}
+
+async function pullBrand24CompetitorRow(competitor, startDate, endDate) {
+  const aliases = BRAND24_PROJECT_ALIASES[String(competitor || '').toLowerCase().trim()] || BRAND24_PROJECT_ALIASES[brandKey(competitor)] || [];
+  const text = await claudeB24(
+    `You have Brand24 social listening tools.
+Resolve exactly one Brand24 project for competitor "${competitor}".
+Alias/project-name hints: ${aliases.length ? aliases.join(', ') : 'none'}.
+
+Required steps:
+1. Call brand24_get_projects and inspect the available project names.
+2. Select the best exact, partial, or alias-matched project for "${competitor}".
+3. If a project is found, call brand24_project_stats from ${startDate} to ${endDate} with response_format="json".
+4. Sum mentionsCount over the returned daily stats.
+
+Do not return found=false unless brand24_get_projects was called and no exact, partial, or alias match exists.
+Return ONLY valid JSON:
+{"brand":"${competitor}","found":true,"projectName":"matched project name","projectId":123,"mentions":0,"observation":"one sentence about verified Brand24 mention volume"}
+If no matching project exists, return ONLY:
+{"brand":"${competitor}","found":false,"searchedFor":"${competitor}","availableProjects":["project names checked"]}`,
+    1600
+  );
+  const parsed = parseJSON(text, {});
+  console.log('[Competitive Intel] single Brand24 competitor response', { competitor, rawPreview: text.slice(0, 1000), parsed });
+  if (!parsed?.found) {
+    return {
+      brand: competitor,
+      mentions: 0,
+      percentage: 0,
+      isClient: false,
+      found: false,
+      searchedFor: parsed?.searchedFor || competitor,
+      availableProjects: parsed?.availableProjects || [],
+    };
+  }
+  return {
+    ...parsed,
+    brand: competitor,
+    mentions: Number(parsed.mentions ?? parsed.totalMentions ?? parsed.mentionsCount) || 0,
+    percentage: 0,
+    isClient: false,
+    found: true,
+  };
 }
 
 function parseGrokText(data) {
@@ -305,6 +353,44 @@ Return valid JSON — name specific events from Brand24 and Grok:
 }
 
 async function competitiveIntelAgent(brand, competitors, startDate, endDate, grokSignals, manualClientMetrics = null) {
+  if (manualClientMetrics) {
+    console.log('[Competitive Intel] manual/PDF path resolving competitors sequentially', { brand, competitors, startDate, endDate });
+    const competitorRows = [];
+    for (const competitor of competitors) {
+      competitorRows.push(await pullBrand24CompetitorRow(competitor, startDate, endDate));
+    }
+    const clientRow = {
+      brand,
+      mentions: manualClientMetrics.mentions.total,
+      percentage: 0,
+      isClient: true,
+      found: true,
+      manualVerified: true,
+    };
+    const allRows = [clientRow, ...competitorRows];
+    const total = allRows.reduce((sum, row) => sum + (row.found ? Number(row.mentions) || 0 : 0), 0) || 1;
+    return {
+      sovData: allRows.map(row => ({
+        ...row,
+        percentage: row.found ? Number((((Number(row.mentions) || 0) / total) * 100).toFixed(1)) : 0,
+      })),
+      competitorNotes: competitorRows
+        .filter(row => row.found)
+        .map(row => ({
+          brand: row.brand,
+          observation: row.observation || `${row.brand} registered ${fmt(row.mentions)} Brand24 mentions in the same period; use this verified count for directional comparison against ${brand}.`,
+        })),
+      diagnostics: competitorRows.map(row => ({
+        brand: row.brand,
+        found: row.found,
+        projectName: row.projectName || '',
+        projectId: row.projectId || '',
+        mentions: row.mentions || 0,
+        availableProjects: row.availableProjects || [],
+      })),
+    };
+  }
+
   const brandsToPull = manualClientMetrics ? competitors : [brand, ...competitors];
   const aliasHints = brandsToPull
     .map(name => {
@@ -1438,7 +1524,7 @@ Return a concise intelligence summary, recurring themes, specific public posts o
                     <span style={{ color:i===0?'#f0f0f0':'#777', fontSize:12 }}>{b}</span>
                     {i===0 && <span style={{ background:`${LIME}22`, color:LIME, fontSize:9, padding:'1px 5px', borderRadius:3 }}>CLIENT</span>}
                   </div>
-                  <span style={{ color:'#2a2a2a', fontSize:10, fontFamily:"'JetBrains Mono',monospace" }}>needs Brand24 project</span>
+                  <span style={{ color:'#2a2a2a', fontSize:10, fontFamily:"'JetBrains Mono',monospace" }}>checked during run</span>
                 </div>
               ))}
               {![brand, ...competitors].filter(Boolean).length && (
