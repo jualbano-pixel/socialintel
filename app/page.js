@@ -37,6 +37,28 @@ const MANUAL_COMPETITOR_OVERRIDES = [
     observation: 'Amazon Prime Video Philippines was manually verified from the Brand24 dashboard PH geolocation view: 38 mentions, 130K reach, 5 positive mentions, and 0 negative mentions.',
   },
 ];
+const COMPETITOR_DISPLAY_NAMES = {
+  'amazon prime': 'Amazon Prime Video Philippines',
+  'amazon prime philippines': 'Amazon Prime Video Philippines',
+  'amazon prime video': 'Amazon Prime Video Philippines',
+  'amazon prime video philippines': 'Amazon Prime Video Philippines',
+  'prime': 'Amazon Prime Video Philippines',
+  'prime video': 'Amazon Prime Video Philippines',
+  'prime video philippines': 'Amazon Prime Video Philippines',
+  'hbo max': 'HBO Max Philippines',
+  'hbo max philippines': 'HBO Max Philippines',
+  'hbo go': 'HBO Max Philippines',
+  'hbo go philippines': 'HBO Max Philippines',
+  'iwant': 'iWant',
+  'iwant tv': 'iWant',
+  'iwanttfc': 'iWant',
+  'iwant tfc': 'iWant',
+  'vivaone': 'Viva One',
+  'viva one': 'Viva One',
+  'viva one philippines': 'Viva One',
+  'viu': 'Viu',
+  'viu philippines': 'Viu',
+};
 
 // ── JSON parser ───────────────────────────────────────────────
 function parseJSON(text, fallback = {}) {
@@ -72,6 +94,11 @@ function sameBrandName(a, b) {
   const aKeys = brandAliases(a);
   const bKeys = brandAliases(b);
   return aKeys.some(x => bKeys.some(y => x === y || x.includes(y) || y.includes(x)));
+}
+
+function displayCompetitorName(value) {
+  const raw = String(value || '').toLowerCase().trim();
+  return COMPETITOR_DISPLAY_NAMES[raw] || COMPETITOR_DISPLAY_NAMES[brandKey(raw)] || value;
 }
 
 function defaultCompetitorsForBrand(brand) {
@@ -120,7 +147,7 @@ If no matching project exists, return ONLY:
   }
   return {
     ...parsed,
-    brand: competitor,
+    brand: displayCompetitorName(competitor),
     mentions: Number(parsed.mentions ?? parsed.totalMentions ?? parsed.mentionsCount) || 0,
     percentage: 0,
     isClient: false,
@@ -385,7 +412,7 @@ async function competitiveIntelAgent(brand, competitors, startDate, endDate, gro
       if (override) {
         competitorRows.push({
           ...override,
-          brand: override.displayBrand || competitor,
+          brand: override.displayBrand || displayCompetitorName(competitor),
           percentage: 0,
           isClient: false,
           found: true,
@@ -407,16 +434,17 @@ async function competitiveIntelAgent(brand, competitors, startDate, endDate, gro
     return {
       sovData: allRows.map(row => ({
         ...row,
+        brand: row.isClient ? row.brand : displayCompetitorName(row.brand),
         percentage: row.found ? Number((((Number(row.mentions) || 0) / total) * 100).toFixed(1)) : 0,
       })),
       competitorNotes: competitorRows
         .filter(row => row.found)
         .map(row => ({
-          brand: row.brand,
+          brand: displayCompetitorName(row.brand),
           observation: row.observation || `${row.brand} registered ${fmt(row.mentions)} Brand24 mentions in the same period; use this verified count for directional comparison against ${brand}.`,
         })),
       diagnostics: competitorRows.map(row => ({
-        brand: row.brand,
+        brand: displayCompetitorName(row.brand),
         found: row.found,
         projectName: row.projectName || '',
         projectId: row.projectId || '',
@@ -503,17 +531,18 @@ If no matching project exists, return:
     ...data,
     sovData: allRows.map(row => ({
       ...row,
+      brand: row.isClient ? row.brand : displayCompetitorName(row.brand),
       percentage: row.found ? Number((((Number(row.mentions) || 0) / total) * 100).toFixed(1)) : 0,
     })),
     competitorNotes: data.competitorNotes?.length
       ? data.competitorNotes.map(note => {
         const matchedName = competitors.find(name => sameBrandName(note.brand, name));
-        return matchedName ? { ...note, brand: matchedName } : note;
+        return { ...note, brand: displayCompetitorName(matchedName || note.brand) };
       })
       : competitorRows
         .filter(row => row.found)
         .map(row => ({
-          brand: row.brand,
+          brand: displayCompetitorName(row.brand),
           observation: `${row.brand} registered ${fmt(row.mentions)} Brand24 mentions in the same period; use this verified count for directional comparison against ${brand}.`,
         })),
   };
@@ -1854,8 +1883,8 @@ Return a concise intelligence summary, recurring themes, specific public posts o
         {competitive.competitorNotes?.length > 0 && (
           <div style={{ ...CARD, marginBottom:14 }}>
             <div style={{ color:'#666', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:12 }}>Competitor Intelligence · B24 + Grok</div>
-            <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10 }}>
-              {competitive.competitorNotes.slice(0,3).map((c,i) => (
+            <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(220px, 1fr))', gap:10 }}>
+              {competitive.competitorNotes.map((c,i) => (
                 <div key={i} style={{ background:'#0d0d0d', border:'1px solid #1a1a1a', borderRadius:8, padding:'12px 14px' }}>
                   <div style={{ color:LIME, fontSize:12, fontWeight:600, marginBottom:8 }}>{c.brand}</div>
                   <div style={{ fontSize:12, color:'#888', lineHeight:1.55 }}>{c.observation}</div>
