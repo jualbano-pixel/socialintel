@@ -1,14 +1,14 @@
 // app/api/competitive-intel/route.ts
 //
 // Competitive Intel Lite — qualitative competitor read without spending
-// Brand24 keyword slots. Sources: Grok (X/Twitter), Perplexity (news/
+// tracked-monitor keyword slots. Sources: Grok (X/Twitter), Perplexity (news/
 // LinkedIn/YouTube), Gemini (Google web/YouTube), Meta AI (manual paste —
 // see note below). Synthesized into directional signal by Claude.
 //
 // This is a SEPARATE, lighter path from the main 6-agent pipeline's
-// Competitive step (which uses brand24_quick_popularity_comparison for
-// projects you DO track in Brand24, e.g. EastWest itself). Use this route
-// for competitors you're deliberately NOT giving a Brand24 project slot to.
+// Competitive step (which uses the tracked monitoring source for
+// projects you DO track, e.g. EastWest itself). Use this route
+// for competitors you're deliberately NOT giving a tracked monitor slot to.
 
 import { NextRequest, NextResponse } from 'next/server';
 
@@ -66,7 +66,7 @@ async function pullGrok(competitor: string, dateRange: string): Promise<SourcePu
       },
       body: JSON.stringify({
         model: 'grok-4.3',
-        input: `Search X/Twitter for mentions of "${competitor}" (Philippine bank) during ${dateRange}. Summarize: top 3 themes/topics people are discussing, overall sentiment tone (positive/neutral/negative lean), and any notable spikes or viral moments. Do not invent numbers — describe qualitatively only.`,
+        input: `Search X/Twitter for mentions of "${competitor}" during ${dateRange}. Summarize: top 3 themes/topics people are discussing, overall sentiment tone (positive/neutral/negative lean), and any notable spikes or viral moments. Infer the relevant industry from the competitor name and do not force a banking or fintech frame. Do not invent numbers — describe qualitatively only.`,
         tools: [{ type: 'x_search' }, { type: 'web_search' }],
       }),
     });
@@ -112,7 +112,7 @@ async function pullPerplexity(competitor: string, dateRange: string): Promise<So
       messages: [
         {
           role: 'user',
-          content: `What is being said about "${competitor}" (Philippine bank) in news coverage, LinkedIn posts, and YouTube content during ${dateRange}? Summarize top 3 themes and overall tone. Qualitative summary only — no fabricated statistics.`,
+          content: `What is being said about "${competitor}" in news coverage, LinkedIn posts, and YouTube content during ${dateRange}? Summarize top 3 themes and overall tone. Infer the relevant industry from the competitor name and do not force a banking or fintech frame. Qualitative summary only — no fabricated statistics.`,
         },
       ],
     }),
@@ -132,7 +132,7 @@ async function pullGemini(competitor: string, dateRange: string): Promise<Source
         {
           parts: [
             {
-              text: `Search the web and YouTube for "${competitor}" (Philippine bank) mentions during ${dateRange}. Summarize top 3 themes and overall sentiment tone. Qualitative only, no invented numbers.`,
+              text: `Search the web and YouTube for "${competitor}" mentions during ${dateRange}. Summarize top 3 themes and overall sentiment tone. Infer the relevant industry from the competitor name and do not force a banking or fintech frame. Qualitative only, no invented numbers.`,
             },
           ],
         },
@@ -211,7 +211,7 @@ async function synthesizeWithClaude(competitor: string, pulls: SourcePull[]): Pr
       messages: [
         {
           role: 'user',
-          content: `You are the Competitive Intel Lite agent in the Signal Intel pipeline. You're synthesizing qualitative, multi-platform signal about a competitor bank ("${competitor}") into a directional competitive read — NOT an audited share-of-voice report.
+          content: `You are the Competitive Intel Lite agent in the Signal Intel pipeline. You're synthesizing qualitative, multi-platform signal about a competitor ("${competitor}") into a directional competitive read — NOT an audited share-of-voice report. Infer the competitor's industry from the available source material and do not force a banking or fintech frame.
 
 Raw pulls from four platform-native AI sources:
 
@@ -223,7 +223,7 @@ Write a tight competitive intel summary (150-250 words) covering:
 3. Sentiment tone lean
 4. One notable signal or spike, if any source flagged one
 
-End with one line making explicit: "This is directional signal from AI-native search, not audited Brand24-grade mention data." Never present anything here as a precise count, percentage, or reach figure.`,
+End with one line making explicit: "This is directional signal from AI-native search, not audited live-monitoring mention data." Never present anything here as a precise count, percentage, or reach figure.`,
         },
       ],
     }),

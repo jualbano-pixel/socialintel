@@ -33,8 +33,8 @@ const MANUAL_COMPETITOR_OVERRIDES = [
     ave: '$11K',
     sourceLabel: 'Manual',
     manualVerified: true,
-    projectName: 'Amazon Prime Video · Brand24 dashboard geo filter: Philippines',
-    observation: 'Amazon Prime Video Philippines was manually verified from the Brand24 dashboard PH geolocation view: 38 mentions, 130K reach, 5 positive mentions, and 0 negative mentions.',
+    projectName: 'Amazon Prime Video · manually verified Philippines view',
+    observation: 'Amazon Prime Video Philippines was manually verified from the Philippines market view: 38 mentions, 130K reach, 5 positive mentions, and 0 negative mentions.',
   },
 ];
 const COMPETITOR_DISPLAY_NAMES = {
@@ -115,8 +115,8 @@ function manualCompetitorOverride(primaryBrand, competitor) {
 async function pullBrand24CompetitorRow(competitor, startDate, endDate) {
   const aliases = BRAND24_PROJECT_ALIASES[String(competitor || '').toLowerCase().trim()] || BRAND24_PROJECT_ALIASES[brandKey(competitor)] || [];
   const text = await claudeB24(
-    `You have Brand24 social listening tools.
-Resolve exactly one Brand24 project for competitor "${competitor}".
+    `You have social listening tools.
+Resolve exactly one tracked project for competitor "${competitor}".
 Alias/project-name hints: ${aliases.length ? aliases.join(', ') : 'none'}.
 
 Required steps:
@@ -127,7 +127,7 @@ Required steps:
 
 Do not return found=false unless brand24_get_projects was called and no exact, partial, or alias match exists.
 Return ONLY valid JSON:
-{"brand":"${competitor}","found":true,"projectName":"matched project name","projectId":123,"mentions":0,"observation":"one sentence about verified Brand24 mention volume"}
+{"brand":"${competitor}","found":true,"projectName":"matched project name","projectId":123,"mentions":0,"observation":"one sentence about verified mention volume"}
 If no matching project exists, return ONLY:
 {"brand":"${competitor}","found":false,"searchedFor":"${competitor}","availableProjects":["project names checked"]}`,
     1600
@@ -196,7 +196,7 @@ async function claude(prompt, maxTokens = 600, fallback = {}) {
   try {
     const r = await fetch('/api/claude', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: CLAUDE_MODEL, max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] }) });
-    return parseJSON(parseClaudeText(await r.json()) ?? '{}', fallback);
+    return maskVendorInObject(parseJSON(parseClaudeText(await r.json()) ?? '{}', fallback));
   } catch(e) { console.warn('Claude:', e.message); return fallback; }
 }
 
@@ -209,7 +209,7 @@ async function claudeText(prompt, maxTokens = 700, label = 'Ask AI') {
   if (!r.ok || data.error) throw new Error(data.error?.message || data.error || `Claude request failed with ${r.status}`);
   const text = parseClaudeText(data);
   if (!text) throw new Error('Claude response did not include data.content[0].text');
-  return text;
+  return maskVendorText(text);
 }
 
 async function claudeB24(prompt, maxTokens = 2200) {
@@ -220,8 +220,44 @@ async function claudeB24(prompt, maxTokens = 2200) {
     if (!r.ok || data.error) console.warn('Claude+B24 API error:', data.error || r.status);
     const text = data.content?.filter(b => b.type === 'text').map(b => b.text).join('') ?? '';
     if (!text) console.warn('Claude+B24 empty text response:', data);
-    return text;
+    return maskVendorText(text);
   } catch(e) { console.warn('Claude+B24:', e.message); return ''; }
+}
+
+async function liveTrackingSnapshot(brand, startDate, endDate) {
+  const aliases = BRAND24_PROJECT_ALIASES[String(brand || '').toLowerCase().trim()] || BRAND24_PROJECT_ALIASES[brandKey(brand)] || [];
+  const setup = savedSetupForBrand(brand);
+  const response = await fetch('/api/tracking/live-snapshot', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      brand,
+      aliases,
+      dateFrom: startDate,
+      dateTo: endDate,
+      philippinesOnly: setup?.philippinesOnly === true,
+    }),
+  });
+  const data = await response.json();
+  if (!response.ok || data.error) throw new Error(data.error || `Live tracking failed with ${response.status}`);
+  return data;
+}
+
+function savedSetupForBrand(brand) {
+  if (typeof window === 'undefined') return null;
+  try {
+    const setups = JSON.parse(window.localStorage.getItem('signalIntelSetups') || '[]');
+    return setups.find(setup => {
+      const names = [
+        setup.primaryBrand,
+        ...(setup.monitors || []).map(monitor => monitor.name),
+      ].filter(Boolean);
+      return names.some(name => sameBrandName(name, brand));
+    }) || null;
+  } catch (error) {
+    console.warn('[Tracking setup] could not read saved setup', error.message);
+    return null;
+  }
 }
 
 async function callGrok(brand, competitors, period) {
@@ -272,8 +308,17 @@ const getMockSov = (brand, comps) => [
 // ══════════════════════════════════════════════════════════════
 
 async function listenerAgent(brand, startDate, endDate) {
+  try {
+    const data = await liveTrackingSnapshot(brand, startDate, endDate);
+    if (data?.found) return data;
+    console.warn('[Listener] no REST monitor found', data);
+    return data;
+  } catch (error) {
+    console.warn('[Listener] REST snapshot unavailable', error.message);
+    if (!String(error.message || '').includes('not configured')) throw error;
+  }
   const text = await claudeB24(
-    `You have Brand24 social listening tools.
+    `You have social listening tools.
 1. List all projects using brand24_get_projects
 2. Find project matching "${brand}" (case-insensitive, partial match OK)
 3. Get stats from ${startDate} to ${endDate} using brand24_project_stats with response_format="json"
@@ -299,6 +344,8 @@ function trackerAgent(d) {
   return {
     mentions: { total: tot, dailyAvg: Math.round(tot / days) },
     totalReach: reach,
+    socialMediaReach: d.socialMediaReach,
+    nonSocialMediaReach: d.nonSocialMediaReach,
     sentiment: {
       positive: { count: pos, pct: overridePct(d.positivePct, parseFloat((pos/totS*100).toFixed(1))) },
       negative: { count: neg, pct: overridePct(d.negativePct, parseFloat((neg/totS*100).toFixed(1))) },
@@ -324,9 +371,11 @@ function manualSnapshotToListenerData(manual, brand) {
   const neutralMentions = Number.isFinite(typedNeutral) ? typedNeutral : Math.max(totalMentions - positiveMentions - negativeMentions, 0);
   return {
     found: true,
-    projectName: `${brand} · manually verified Brand24 PDF`,
+    projectName: `${brand} · manually verified export`,
     totalMentions,
     totalReach: Number(manual.totalReach) || 0,
+    socialMediaReach: Number(manual.socialMediaReach) || 0,
+    nonSocialMediaReach: Number(manual.nonSocialMediaReach) || 0,
     positiveMentions,
     negativeMentions,
     neutralMentions,
@@ -336,7 +385,7 @@ function manualSnapshotToListenerData(manual, brand) {
     dailyStats: [],
     manualVerified: true,
     manualUploadDate: manual.uploadDate || new Date().toISOString(),
-    manualFileName: manual.fileName || 'Manual Brand24 data',
+    manualFileName: manual.fileName || 'Manual tracking data',
     averagePresenceScore: manual.averagePresenceScore || '',
     ave: manual.ave || '',
     sourceCategories: manual.sourceCategories || [],
@@ -348,7 +397,7 @@ function manualSnapshotToListenerData(manual, brand) {
 async function contextScoutAgent(brand, competitors, period, startDate, endDate) {
   const [b24Result, grokResult] = await Promise.allSettled([
     claudeB24(
-      `You have Brand24 social listening tools.
+      `You have social listening tools.
 For project matching "${brand}", from ${startDate} to ${endDate}:
 1. Use brand24_project_events to find anomalies/spikes
 2. Use brand24_get_semantic_search_mentions with query="${brand}" for what people are saying (10 mentions)
@@ -369,7 +418,7 @@ async function manualContextScoutAgent(brand, competitors, period) {
     found: false,
     events: [],
     themes: [],
-    qualitativeSignals: 'Primary metrics came from a manually verified Brand24 PDF upload. No live Brand24 enrichment was run for the primary brand.',
+    qualitativeSignals: 'Primary metrics came from a manually verified monitoring export upload. No live enrichment was run for the primary brand.',
     topTopics: [],
     grokSignals: grok,
     manualVerified: true,
@@ -377,21 +426,21 @@ async function manualContextScoutAgent(brand, competitors, period) {
 }
 
 async function analystAgent(brand, period, metrics, context) {
-  const b24Block = context.found
-    ? `BRAND24 EVENTS: ${context.events?.map(e => e.description).join('; ') || 'none'}
-BRAND24 SEMANTIC: ${context.qualitativeSignals}
+  const monitoringBlock = context.found
+    ? `MONITORING EVENTS: ${context.events?.map(e => e.description).join('; ') || 'none'}
+MONITORING SEMANTIC: ${context.qualitativeSignals}
 TOP TOPICS: ${context.topTopics?.map(t => `${t.name}(${t.mentions})`).join(', ') || 'none'}`
-    : `No Brand24 project found. Use Philippine market knowledge for ${period}.`;
+    : `No tracking source found. Use Philippine market knowledge for ${period}.`;
   const grokBlock = context.grokSignals
     ? `GROK (X/Twitter + Reddit): ${context.grokSignals.substring(0, 600)}`
     : 'No Grok signals.';
 
   return await claude(
-    `Senior social media analyst, Philippine agency. Analyze ${brand} (${period}).
+`Senior social media analyst, Philippine agency. Analyze ${brand} (${period}).
 METRICS: Mentions ${metrics.mentions.total} | Reach ${fmt(metrics.totalReach)} | ${metrics.sentiment.positive.pct}% pos / ${metrics.sentiment.negative.pct}% neg / ${metrics.sentiment.neutral.pct}% neu
-${b24Block}
+${monitoringBlock}
 ${grokBlock}
-Return valid JSON — name specific events from Brand24 and Grok:
+Return valid JSON. Use client-facing language only: say "our monitoring data", "verified monitoring data", or "live monitoring" for tracked mention data. Never name the underlying monitoring vendor.
 {"executiveSummary":"3 sentences with specific numbers and named events","spikeDrivers":["specific named driver with evidence","second specific driver"],"sentimentNarrative":"2 sentences naming specific positive and negative drivers","channelInsight":"1 sentence with platform specifics"}`,
     700,
     {
@@ -441,7 +490,7 @@ async function competitiveIntelAgent(brand, competitors, startDate, endDate, gro
         .filter(row => row.found)
         .map(row => ({
           brand: displayCompetitorName(row.brand),
-          observation: row.observation || `${row.brand} registered ${fmt(row.mentions)} Brand24 mentions in the same period; use this verified count for directional comparison against ${brand}.`,
+          observation: row.observation || `${row.brand} registered ${fmt(row.mentions)} verified mentions in the same period; use this count for directional comparison against ${brand}.`,
         })),
       diagnostics: competitorRows.map(row => ({
         brand: displayCompetitorName(row.brand),
@@ -449,7 +498,7 @@ async function competitiveIntelAgent(brand, competitors, startDate, endDate, gro
         projectName: row.projectName || '',
         projectId: row.projectId || '',
         mentions: row.mentions || 0,
-        sourceLabel: row.sourceLabel || (row.manualVerified ? 'Manual' : 'Brand24'),
+        sourceLabel: row.sourceLabel || (row.manualVerified ? 'Manual' : 'Live'),
         availableProjects: row.availableProjects || [],
       })),
     };
@@ -465,15 +514,15 @@ async function competitiveIntelAgent(brand, competitors, startDate, endDate, gro
     .join('\n');
   console.log('[Competitive Intel] Brand24 project resolution request', { brand, competitors, brandsToPull, startDate, endDate, manualClient: !!manualClientMetrics, aliasHints });
   const text = await claudeB24(
-    `You have Brand24 social listening tools.
+    `You have social listening tools.
 Get total mention counts from ${startDate} to ${endDate} for: ${brandsToPull.join(', ')}
-For each: first list projects using brand24_get_projects, then find the best matching Brand24 project by exact, partial, or alias match. Use these alias hints when present:
+For each: first list projects using brand24_get_projects, then find the best matching tracked project by exact, partial, or alias match. Use these alias hints when present:
 ${aliasHints || 'No additional alias hints.'}
 Then get stats using brand24_project_stats response_format="json" and sum mentionsCount.
 Calculate SOV percentages. Brands without projects: found=false.
 ${grokSignals ? `Grok competitor signals: ${grokSignals.substring(0, 400)}` : ''}
 Return ONLY valid JSON:
-{"sovData":[{"brand":"${brand}","mentions":1216,"percentage":35.7,"isClient":true,"found":true},{"brand":"${competitors[0] || 'BPI'}","mentions":0,"percentage":0,"isClient":false,"found":false}],"competitorNotes":[{"brand":"${competitors[0] || 'BPI'}","observation":"specific observation from Brand24 data or Grok signals"}]}`
+{"sovData":[{"brand":"${brand}","mentions":1216,"percentage":35.7,"isClient":true,"found":true},{"brand":"${competitors[0] || 'BPI'}","mentions":0,"percentage":0,"isClient":false,"found":false}],"competitorNotes":[{"brand":"${competitors[0] || 'BPI'}","observation":"specific observation from monitoring data or Grok signals"}]}`
   );
   const data = parseJSON(text, { sovData: getMockSov(brand, competitors), competitorNotes: [] });
   console.log('[Competitive Intel] Brand24 project resolution response', { rawPreview: text.slice(0, 1200), parsed: data });
@@ -489,8 +538,8 @@ Return ONLY valid JSON:
     const recoveredRows = await Promise.all(missingRows.map(async row => {
       const aliases = BRAND24_PROJECT_ALIASES[String(row.brand || '').toLowerCase().trim()] || BRAND24_PROJECT_ALIASES[brandKey(row.brand)] || [];
       const retryText = await claudeB24(
-        `You have Brand24 social listening tools.
-Resolve exactly one Brand24 project for competitor "${row.brand}".
+        `You have social listening tools.
+Resolve exactly one tracked project for competitor "${row.brand}".
 Alias/project-name hints: ${aliases.length ? aliases.join(', ') : 'none'}.
 Steps:
 1. Call brand24_get_projects.
@@ -498,7 +547,7 @@ Steps:
 3. If a project is found, call brand24_project_stats from ${startDate} to ${endDate} with response_format="json".
 4. Sum mentionsCount over the returned daily stats.
 Return ONLY valid JSON in this shape:
-{"brand":"${row.brand}","found":true,"projectName":"matched project name","projectId":123,"mentions":0,"observation":"one sentence about verified Brand24 mention volume"}
+{"brand":"${row.brand}","found":true,"projectName":"matched project name","projectId":123,"mentions":0,"observation":"one sentence about verified mention volume"}
 If no matching project exists, return:
 {"brand":"${row.brand}","found":false,"searchedFor":"${row.brand}","availableProjects":["project names checked"]}`,
         1200
@@ -543,7 +592,7 @@ If no matching project exists, return:
         .filter(row => row.found)
         .map(row => ({
           brand: displayCompetitorName(row.brand),
-          observation: `${row.brand} registered ${fmt(row.mentions)} Brand24 mentions in the same period; use this verified count for directional comparison against ${brand}.`,
+          observation: `${row.brand} registered ${fmt(row.mentions)} verified mentions in the same period; use this count for directional comparison against ${brand}.`,
         })),
   };
 }
@@ -584,8 +633,8 @@ function groundedReportFallback(brand, analysis, competitive) {
     ? `${brand} holds ${client.percentage}% SOV from ${fmt(client.mentions)} manually verified mentions.`
     : `${brand} has manually verified primary metrics, but no client SOV row was available.`;
   const manualLine = manualRows.length
-    ? `${manualRows.map(row => `${row.brand} is manually verified at ${fmt(row.mentions)} mentions`).join('; ')} and should not be treated as a live Brand24 pull.`
-    : 'All competitor rows shown are live Brand24 pulls unless otherwise labeled.';
+    ? `${manualRows.map(row => `${row.brand} is manually verified at ${fmt(row.mentions)} mentions`).join('; ')} and should not be treated as a live pull.`
+    : 'All competitor rows shown are live pulls unless otherwise labeled.';
   return {
     positiveThemes: [
       analysis?.spikeDrivers?.[0] || 'Primary positive lift came from the named spike driver identified in the analyst summary.',
@@ -600,8 +649,8 @@ function groundedReportFallback(brand, analysis, competitive) {
       `${leaderLine} Prioritize always-on local content marketing and creator seeding to close that visibility gap.`,
       `${clientLine} Use the manually verified Netflix snapshot as the headline baseline and keep competitor sourcing labels visible in any client export.`,
       manualRows.length
-        ? `Keep the Amazon Prime override in place until the Brand24 PH project/API issue is resolved; do not use the unfiltered live pull for Amazon Prime comparisons.`
-        : `Use the Brand24 competitor rows to set weekly share-of-voice guardrails and investigate any competitor spikes above Netflix's current baseline.`,
+        ? `Keep the Amazon Prime override in place until the PH source issue is resolved; do not use the unfiltered live pull for Amazon Prime comparisons.`
+        : `Use verified competitor rows to set weekly share-of-voice guardrails and investigate any competitor spikes above Netflix's current baseline.`,
     ],
   };
 }
@@ -612,7 +661,7 @@ async function reportBuilderAgent(brand, analysis, competitive, context, competi
     .filter(line => !line.includes('No comparative data available'))
     .join('\n\n') || 'none';
   const verifiedCompetitiveMetrics = competitive?.sovData
-    ?.map(s => `${s.brand}: ${s.found ? `${s.percentage}% SOV from ${s.mentions} mentions${s.manualVerified || s.sourceLabel ? ` (${s.sourceLabel || 'Manual'} verified)` : ''}` : 'no Brand24 project'}`)
+    ?.map(s => `${s.brand}: ${s.found ? `${s.percentage}% SOV from ${s.mentions} mentions${s.manualVerified || s.sourceLabel ? ` (${s.sourceLabel || 'Manual'} verified)` : ''}` : 'no tracking source'}`)
     .join(' | ') || 'none';
   const competitorNotes = competitive?.competitorNotes
     ?.map(note => `${note.brand}: ${note.observation}`)
@@ -623,10 +672,10 @@ SUMMARY: ${analysis.executiveSummary}
 DRIVERS: ${analysis.spikeDrivers?.join(' | ')}
 THEMES: ${context.themes?.join(', ')}
 GROK SIGNALS: ${context.grokSignals?.substring(0, 400) || 'none'}
-BRAND24 VERIFIED COMPETITIVE METRICS: ${verifiedCompetitiveMetrics}
+VERIFIED COMPETITIVE METRICS: ${verifiedCompetitiveMetrics}
 COMPETITOR INTELLIGENCE NOTES: ${competitorNotes}
-DIRECTIONAL COMPETITOR INTEL (AI-native sources, not audited Brand24 data): ${directionalIntel.substring(0, 1200)}
-Use the verified competitive metrics and notes directly. Do not return generic banking, partnership, service-delivery, or registration boilerplate unless those topics appear above.
+DIRECTIONAL COMPETITOR INTEL (AI-native sources, not audited live monitoring data): ${directionalIntel.substring(0, 1200)}
+Use the verified competitive metrics and notes directly. Use client-facing language only: say "our monitoring data", "verified monitoring data", or "live monitoring" for tracked mention data. Never name the underlying monitoring vendor. Do not return generic banking, partnership, service-delivery, or registration boilerplate unless those topics appear above.
 Return valid JSON:
 {"positiveThemes":["specific theme with evidence","specific theme"],"negativeThemes":["specific theme with evidence","specific theme"],"scamRiskAlert":"1 sentence if fraud signals present, otherwise null","recommendations":["specific actionable rec tied to data","specific rec","specific rec"]}`,
     900,
@@ -636,19 +685,19 @@ Return valid JSON:
 
 // ── AGENT CONFIG ──────────────────────────────────────────────
 const AGENTS = [
-  { key: 'listener',    name: '1 · Listener',         role: 'Brand24 MCP → project stats' },
+  { key: 'listener',    name: '1 · Listener',         role: 'Live monitoring → project stats' },
   { key: 'tracker',     name: '2 · Tracker',           role: 'Quantitative computation' },
-  { key: 'context',     name: '3 · Context Scout',     role: 'Brand24 events + Grok X/Twitter' },
-  { key: 'analyst',     name: '4 · Analyst',           role: 'Brand24 + Grok grounded' },
-  { key: 'competitive', name: '5 · Competitive Intel', role: 'Brand24 SOV + AI-native Lite' },
+  { key: 'context',     name: '3 · Context Scout',     role: 'Monitoring events + Grok X/Twitter' },
+  { key: 'analyst',     name: '4 · Analyst',           role: 'Live + Grok grounded' },
+  { key: 'competitive', name: '5 · Competitive Intel', role: 'Verified SOV + AI-native Lite' },
   { key: 'reporter',    name: '6 · Report Builder',    role: 'Final synthesis' },
 ];
 const DETAILS = {
-  listener:    'Pulling stats from Brand24 MCP...',
+  listener:    'Pulling verified live stats...',
   tracker:     'Computing metrics...',
-  context:     'Brand24 events + Grok X/Twitter signals...',
-  analyst:     'Synthesizing Brand24 + Grok intelligence...',
-  competitive: 'Brand24 SOV + directional AI-native reads...',
+  context:     'Monitoring events + Grok X/Twitter signals...',
+  analyst:     'Synthesizing live and Grok intelligence...',
+  competitive: 'Verified SOV + directional AI-native reads...',
   reporter:    'Assembling final report...',
 };
 const IDLE = { listener:'idle', tracker:'idle', context:'idle', analyst:'idle', competitive:'idle', reporter:'idle' };
@@ -814,30 +863,30 @@ function socialListeningSnapshot(brand, metrics, demoMode) {
   const neutral = metrics.sentiment.neutral.count || 0;
   const socialMentions = Math.round(total * 0.62);
   const nonSocialMentions = Math.max(total - socialMentions, 0);
-  const socialReach = Math.round(reach * 0.76);
-  const nonSocialReach = Math.max(reach - socialReach, 0);
+  const socialReach = Number(metrics.socialMediaReach) || Math.round(reach * 0.76);
+  const nonSocialReach = Number(metrics.nonSocialMediaReach) || Math.max(reach - socialReach, 0);
   const isManual = !!metrics.manualVerified;
   const sourcePalette = ['#2f86de', '#dc37a5', '#e74c3c', '#f78fb3', '#33b6b4', '#7155d9', '#f4d03f', '#7ed6df'];
   const sourceCategories = metrics.sourceCategories?.length
     ? metrics.sourceCategories.map((s, i) => ({
       name: s.name || `Source ${i + 1}`,
       pct: Number(s.pct) || pct(Number(s.count) || 0, total),
-      color: sourcePalette[i % sourcePalette.length],
+      color: s.color || sourcePalette[i % sourcePalette.length],
     }))
-    : (isManual ? [] : DEMO_SOCIAL_LISTENING.sources);
-  const topMentions = isManual
-    ? (metrics.topMentions || []).map((m, i) => ({
-      source: m.source || 'Brand24 PDF',
-      title: m.title || `PDF mention ${i + 1}`,
+    : [];
+  const topMentions = (metrics.topMentions || []).map((m, i) => ({
+      source: m.source || (isManual ? 'Uploaded export' : 'Live source'),
+      title: m.title || `${isManual ? 'Uploaded' : 'Live'} mention ${i + 1}`,
       meta: m.meta || '',
       sentiment: m.sentiment || 'Neutral',
-      text: m.text || m.title || 'Mention extracted from uploaded Brand24 PDF.',
+      text: m.text || m.title || `Mention extracted from ${isManual ? 'the uploaded export' : 'live tracking data'}.`,
       icon: (m.icon || (m.source || `M${i + 1}`).slice(0, 2)).toUpperCase(),
       color: m.color || sourcePalette[i % sourcePalette.length],
-    }))
-    : DEMO_SOCIAL_LISTENING.mentions.map(m => ({ ...m, title: m.title.replaceAll('EastWest Bank', brand).replaceAll('EastWest', brand.split(' ')[0] || brand) }));
+    }));
   return {
-    ...(isManual ? { mentions: [], sources: [], sentiment: [] } : DEMO_SOCIAL_LISTENING),
+    mentions: [],
+    sources: [],
+    sentiment: [],
     overview: [
       { label: 'Total mentions', value: fmt(total), change: isManual ? 'Manual' : 'Live', tone: 'live' },
       { label: 'Total reach', value: fmt(reach), change: isManual ? 'Manual' : 'Live', tone: 'live' },
@@ -965,7 +1014,7 @@ function SocialListeningReport({ brand, metrics, demoMode }) {
       <div style={{ ...CARD, marginBottom:16 }}>
         <h2 style={{ fontSize:20, margin:'0 0 8px', fontWeight:800 }}>Social Listening Snapshot</h2>
         <p style={{ color:'#777', fontSize:13, lineHeight:1.65, margin:0 }}>
-          Live social listening data is not available for this brand yet. Add a Brand24 project or enable demo mode for the EastWest pitch snapshot.
+          Live social listening data is not available for this brand yet. Add a tracking source or enable demo mode for the EastWest pitch snapshot.
         </p>
       </div>
     );
@@ -977,8 +1026,8 @@ function SocialListeningReport({ brand, metrics, demoMode }) {
     ? social.sources.reduce((best, source) => (Number(source.pct) || 0) > (Number(best.pct) || 0) ? source : best, social.sources[0])
     : null;
   const sourceNarrative = social.sourceNarrative || (topSource
-    ? `${topSource.name} is the largest source in this uploaded Brand24 snapshot at ${topSource.pct}%.`
-    : 'Source-share data was not extracted from the uploaded PDF.');
+    ? `${topSource.name} is the largest source in this uploaded tracking snapshot at ${topSource.pct}%.`
+    : 'Source-share data was not extracted from the uploaded export.');
   return (
     <div style={{ marginBottom:16 }}>
       <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(320px, 1fr))', gap:12, alignItems:'start', marginBottom:12 }}>
@@ -987,7 +1036,7 @@ function SocialListeningReport({ brand, metrics, demoMode }) {
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(280px, 1fr))', gap:8 }}>
             {social.mentions.length
               ? social.mentions.map((mention, i) => <MentionCard key={i} mention={mention}/>)
-              : <div style={{ ...CARD, minHeight:118, color:'#777', fontSize:12, lineHeight:1.65 }}>No Top Mentions were extracted from this uploaded PDF. Use the confirmation step to verify whether the Brand24 export included that page.</div>
+              : <div style={{ ...CARD, minHeight:118, color:'#777', fontSize:12, lineHeight:1.65 }}>No top mentions were extracted from this uploaded export. Use the confirmation step to verify whether the tracking export included that page.</div>
             }
           </div>
         </div>
@@ -1002,7 +1051,7 @@ function SocialListeningReport({ brand, metrics, demoMode }) {
           <h2 style={{ fontSize:20, margin:'0 0 12px', fontWeight:800 }}>Sources Share</h2>
           <div style={{ color:'#f0f0f0', fontSize:15, fontWeight:800, marginBottom:6 }}>{topSource ? `${topSource.name} leads source share` : 'Source mix unavailable'}</div>
           <p style={{ color:'#9ca3af', fontSize:12, margin:'0 0 18px' }}>{sourceNarrative}</p>
-          {social.sources?.length ? <DonutChart data={social.sources}/> : <p style={{ color:'#777', fontSize:12, lineHeight:1.65 }}>No source category breakdown was extracted from this PDF.</p>}
+          {social.sources?.length ? <DonutChart data={social.sources}/> : <p style={{ color:'#777', fontSize:12, lineHeight:1.65 }}>No source category breakdown was extracted from this export.</p>}
         </div>
         <div style={{ ...CARD, minHeight:270 }}>
           <h2 style={{ fontSize:20, margin:'0 0 12px', fontWeight:800 }}>Sentiment Share</h2>
@@ -1073,9 +1122,25 @@ function hasInternalOpsText(text = '') {
   ].some(term => lower.includes(term));
 }
 
+function maskVendorText(value = '') {
+  return String(value || '')
+    .replace(/Brand24-grade/gi, 'audited live-monitoring')
+    .replace(/Brand24\s+MCP/gi, 'live monitoring')
+    .replace(/Brand24/gi, 'our monitoring data')
+    .replace(/\bB24\b/g, 'live monitoring');
+}
+
+function maskVendorInObject(value) {
+  if (Array.isArray(value)) return value.map(maskVendorInObject);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, maskVendorInObject(item)]));
+  }
+  return typeof value === 'string' ? maskVendorText(value) : value;
+}
+
 function clientSafeText(text = '') {
   if (!text || hasInternalOpsText(text)) return 'No comparative data available for this period.';
-  return String(text).replace(/Recommended Next Steps[\s\S]*$/i, '').trim() || 'No comparative data available for this period.';
+  return maskVendorText(String(text).replace(/Recommended Next Steps[\s\S]*$/i, '').trim()) || 'No comparative data available for this period.';
 }
 
 function IntelligenceQuery({ query, setQuery, loading, result, error, open, setOpen, onSubmit }) {
@@ -1160,9 +1225,9 @@ function SourceAttribution({ hasB24, hasGrok, competitiveLite, manualVerified, u
   return (
     <div style={{ display:'flex', flexWrap:'wrap', gap:5, alignItems:'center', marginTop:7 }}>
       <SourceBadge
-        label={manualVerified ? manualLabel : hasB24 ? 'Brand24 Live' : 'Brand24 Demo'}
+        label={manualVerified ? manualLabel : hasB24 ? 'Live Tracking' : 'Demo Snapshot'}
         active={hasB24 || manualVerified}
-        note={manualVerified ? 'Manually verified data from uploaded Brand24 PDF' : hasB24 ? 'Verified Metrics from Brand24' : 'Brand24 project not live for this run'}
+        note={manualVerified ? 'Manually verified data from uploaded monitoring export' : hasB24 ? 'Verified live metrics' : 'Tracking source not live for this run'}
       />
       <SourceBadge label="Claude" active={statuses.claude.active} note={statuses.claude.note} />
       <SourceBadge label="Grok" active={statuses.grok.active} note={statuses.grok.note} />
@@ -1184,7 +1249,7 @@ function DirectionalIntelLite({ competitiveLite }) {
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12, marginBottom:12 }}>
         <div>
           <div style={{ color:'#1DA1F2', fontSize:10, letterSpacing:'0.14em', textTransform:'uppercase', fontFamily:"'JetBrains Mono',monospace", marginBottom:4 }}>Directional Intelligence · AI-native sources</div>
-          <p style={{ color:'#777', fontSize:12, lineHeight:1.55, margin:0 }}>Grok, Perplexity, Gemini, and optional manual Meta AI notes. Not audited Brand24 mention data.</p>
+          <p style={{ color:'#777', fontSize:12, lineHeight:1.55, margin:0 }}>Grok, Perplexity, Gemini, and optional manual Meta AI notes. Not audited live monitoring mention data.</p>
         </div>
         <span style={{ background:'#1DA1F222', border:'1px solid #1DA1F244', borderRadius:10, padding:'3px 9px', fontSize:9, color:'#1DA1F2', whiteSpace:'nowrap', fontFamily:"'JetBrains Mono',monospace" }}>AI-NATIVE</span>
       </div>
@@ -1217,7 +1282,7 @@ function composeReportContext({ brand, period, metrics, context, analysis, compe
   return `
 Brand: ${brand}
 Period: ${period}
-Headline metrics source: ${metrics?.manualVerified ? `Manually verified Brand24 PDF uploaded ${metrics?.manualUploadDate || 'during this run'}` : metrics?.found ? 'Brand24 live MCP pull' : 'No verified Brand24 metrics'}
+Headline metrics source: ${metrics?.manualVerified ? `Manually verified monitoring export uploaded ${metrics?.manualUploadDate || 'during this run'}` : metrics?.found ? 'live tracking pull' : 'No verified live metrics'}
 Mentions: ${metrics?.mentions?.total ?? 0}
 Daily average: ${metrics?.mentions?.dailyAvg ?? 0}
 Reach: ${fmt(metrics?.totalReach ?? 0)}
@@ -1225,11 +1290,11 @@ Sentiment: ${metrics?.sentiment?.positive?.pct ?? 0}% positive, ${metrics?.senti
 Executive summary: ${analysis?.executiveSummary || 'n/a'}
 Spike drivers: ${analysis?.spikeDrivers?.join(' | ') || 'n/a'}
 Sentiment narrative: ${analysis?.sentimentNarrative || 'n/a'}
-Brand24 events: ${context?.events?.map(e => `${e.date}: ${e.description}`).join(' | ') || 'n/a'}
+Monitoring events: ${context?.events?.map(e => `${e.date}: ${e.description}`).join(' | ') || 'n/a'}
 Grok signals: ${context?.grokSignals?.substring(0, 1200) || 'n/a'}
-Verified Brand24 share of voice: ${competitive?.sovData?.map(s => `${s.brand}: ${s.found ? `${s.percentage}% (${s.mentions})` : 'no project'}`).join(' | ') || 'n/a'}
+Verified share of voice: ${competitive?.sovData?.map(s => `${s.brand}: ${s.found ? `${s.percentage}% (${s.mentions})` : 'no project'}`).join(' | ') || 'n/a'}
 Directional AI-native competitor intel: ${competitiveLite?.competitors?.map(c => `${c.competitor}: ${clientSafeText(c.synthesis)}`).filter(line => !line.includes('No comparative data available')).join(' | ') || 'n/a'}
-Directional intel caveat: AI-native competitor reads are not audited Brand24 mention counts or reach figures.
+Directional intel caveat: AI-native competitor reads are not audited live monitoring counts or reach figures.
 Recommendations: ${report?.recommendations?.join(' | ') || 'n/a'}
 Known demo context: ${demoContext || 'n/a'}
 `;
@@ -1275,7 +1340,7 @@ export default function SignalIntel() {
   const setManualField = (key, value) => setManualData(p => ({ ...(p || {}), [key]: value }));
 
   const blankManualData = (overrides = {}) => ({
-    fileName: 'Manual Brand24 entry',
+    fileName: 'Manual tracking entry',
     uploadDate: new Date().toISOString(),
     dateRange: period,
     totalMentions: '',
@@ -1292,7 +1357,7 @@ export default function SignalIntel() {
     topMentions: [],
     sourceNarrative: '',
     confidence: 'manual',
-    warnings: ['Manual entry mode: type the Brand24 dashboard/PDF values before confirming.'],
+    warnings: ['Manual entry mode: type the tracking dashboard or export values before confirming.'],
     diagnostics: [],
     ...overrides,
   });
@@ -1327,12 +1392,12 @@ export default function SignalIntel() {
     try {
       const form = new FormData();
       form.append('file', file);
-      console.log('[Brand24 PDF upload] calling /api/extract-brand24-pdf', { name: file.name, size: file.size, type: file.type });
-      setUploadStatus('Calling /api/extract-brand24-pdf...');
+      console.log('[monitoring export upload] calling /api/extract-brand24-pdf', { name: file.name, size: file.size, type: file.type });
+      setUploadStatus('Reading the monitoring export...');
       const response = await fetch('/api/extract-brand24-pdf', { method: 'POST', body: form });
       const contentType = response.headers.get('content-type') || '';
       const data = contentType.includes('application/json') ? await response.json() : { error: await response.text() };
-      console.log('[Brand24 PDF upload] extraction response', { ok: response.ok, status: response.status, data });
+      console.log('[monitoring export upload] extraction response', { ok: response.ok, status: response.status, data });
       setUploadStatus(`Extraction response received (${response.status}).`);
       if (!response.ok || data.error) throw new Error(data.error || `PDF extraction failed with ${response.status}`);
       const extracted = data.extracted || {};
@@ -1361,14 +1426,14 @@ export default function SignalIntel() {
       setUploadStatus('PDF extraction completed. Please confirm the numbers before running.');
       setUploadError('');
     } catch (e) {
-      console.error('[Brand24 PDF upload] error', e);
+      console.error('[monitoring export upload] error', e);
       setUploadError(`Couldn't read your PDF — ${e.message}. Please enter values manually below.`);
       setUploadStatus('PDF extraction failed. Manual confirmation is required.');
       setManualData(blankManualData({
         source: 'pdf-failed',
         fileName: file.name,
         confidence: 'extraction failed',
-        warnings: [`PDF extraction failed: ${e.message}`, 'Type the Brand24 dashboard/PDF values before confirming.'],
+        warnings: [`PDF extraction failed: ${e.message}`, 'Type the tracking dashboard or export values before confirming.'],
       }));
     } finally {
       setUploadLoading(false);
@@ -1387,6 +1452,7 @@ export default function SignalIntel() {
   };
 
   const run = async (confirmedManualData = null) => {
+    if (confirmedManualData?.nativeEvent || confirmedManualData?.preventDefault) confirmedManualData = null;
     setStep('running'); setError(''); setAgents(IDLE); setOut({});
     try {
       if (!brand.trim()) throw new Error('Enter a client / brand before running.');
@@ -1580,10 +1646,10 @@ Return a concise intelligence summary, recurring themes, specific public posts o
         <div style={{ marginBottom:32 }}>
           <div style={{ color:LIME, fontFamily:"'JetBrains Mono',monospace", fontSize:10, letterSpacing:'0.2em', marginBottom:8 }}>PRAXIS EXPERIENTIAL · SOCIAL INTELLIGENCE</div>
           <h1 style={{ fontFamily:"'Barlow Condensed',sans-serif", fontSize:44, fontWeight:700, margin:'0 0 4px' }}>SIGNAL INTEL <span style={{ color:LIME }}>v3</span></h1>
-          <p style={{ color:'#444', fontSize:12, margin:'0 0 12px' }}>Brand24 MCP · Grok x_search · Claude 6-agent pipeline · Vercel</p>
+          <p style={{ color:'#444', fontSize:12, margin:'0 0 12px' }}>Signal Intel live monitoring · Grok search · Claude synthesis · Vercel</p>
           <div style={{ background:'#0d1100', border:`1px solid ${LIME}20`, borderRadius:6, padding:'8px 14px', display:'flex', flexWrap:'wrap', gap:4, alignItems:'center' }}>
             <span style={{ color:LIME, fontSize:10, fontFamily:"'JetBrains Mono',monospace", marginRight:4 }}>PIPELINE:</span>
-            {['1·Listener(B24)','2·Tracker','3·Scout(B24+Grok)','4·Analyst','5·Competitive(B24)','6·Report'].map((s,i) => (
+            {['1·Listener','2·Tracker','3·Scout+Grok','4·Analyst','5·Competitive','6·Report'].map((s,i) => (
               <span key={i} style={{ fontSize:10 }}>{i>0&&<span style={{ color:'#333', margin:'0 3px' }}>→</span>}<span style={{ color:s.includes('Scout')?LIME:s.includes('Analyst')?'#88cc88':'#666' }}>{s}</span></span>
             ))}
           </div>
@@ -1619,10 +1685,10 @@ Return a concise intelligence summary, recurring themes, specific public posts o
           <div style={{ background:'#0a0c0a', border:`1px solid ${LIME}22`, borderRadius:8, padding:16 }}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:10 }}>
               <div>
-                <div style={{ color:LIME, fontSize:10, letterSpacing:'0.15em', textTransform:'uppercase', fontFamily:"'JetBrains Mono',monospace", marginBottom:4 }}>Brand24 Projects Required</div>
-                <p style={{ color:'#555', fontSize:12, lineHeight:1.6 }}>Each brand needs a Brand24 project set up first.<br/>Pipeline auto-detects which projects exist.</p>
+                <div style={{ color:LIME, fontSize:10, letterSpacing:'0.15em', textTransform:'uppercase', fontFamily:"'JetBrains Mono',monospace", marginBottom:4 }}>Tracking Sources Required</div>
+                <p style={{ color:'#555', fontSize:12, lineHeight:1.6 }}>Each brand needs a tracking source set up first.<br/>Pipeline auto-detects which sources exist.</p>
               </div>
-              <a href="https://app.brand24.com" target="_blank" rel="noreferrer" style={{ background:'#161616', border:`1px solid ${LIME}44`, borderRadius:6, padding:'7px 12px', color:LIME, fontSize:11, textDecoration:'none', whiteSpace:'nowrap' }}>Open Brand24 →</a>
+              <a href="/setup" style={{ background:'#161616', border:`1px solid ${LIME}44`, borderRadius:6, padding:'7px 12px', color:LIME, fontSize:11, textDecoration:'none', whiteSpace:'nowrap' }}>Create Source →</a>
             </div>
             <div style={{ display:'flex', flexDirection:'column', gap:5 }}>
               {[brand, ...competitors].filter(Boolean).map((b,i) => (
@@ -1637,7 +1703,7 @@ Return a concise intelligence summary, recurring themes, specific public posts o
               ))}
               {![brand, ...competitors].filter(Boolean).length && (
                 <div style={{ background:'#111', borderRadius:5, padding:'9px 10px', color:'#555', fontSize:12 }}>
-                  Add a brand or upload a Brand24 PDF to begin.
+                  Add a brand or upload a monitoring export to begin.
                 </div>
               )}
             </div>
@@ -1646,8 +1712,8 @@ Return a concise intelligence summary, recurring themes, specific public posts o
           <div style={{ background:'#10110c', border:'1px solid #ffda7544', borderRadius:8, padding:16 }}>
             <div style={{ display:'flex', justifyContent:'space-between', gap:12, alignItems:'flex-start', marginBottom:12 }}>
               <div>
-                <div style={{ color:'#ffda75', fontSize:10, letterSpacing:'0.15em', textTransform:'uppercase', fontFamily:"'JetBrains Mono',monospace", marginBottom:4 }}>Manual Brand24 PDF fallback</div>
-                <p style={{ color:'#777', fontSize:12, lineHeight:1.6, margin:0 }}>Upload available data here when Brand24 live geo filters are not usable. The pipeline will not run until you confirm the numbers below.</p>
+                <div style={{ color:'#ffda75', fontSize:10, letterSpacing:'0.15em', textTransform:'uppercase', fontFamily:"'JetBrains Mono',monospace", marginBottom:4 }}>Manual data fallback</div>
+                <p style={{ color:'#777', fontSize:12, lineHeight:1.6, margin:0 }}>Upload available data here when live market filters are not usable. The pipeline will not run until you confirm the numbers below.</p>
               </div>
               <div style={{ display:'flex', gap:8, flexWrap:'wrap', justifyContent:'flex-end' }}>
                 <label style={{ background:'#ffda75', border:'1px solid #ffda75', borderRadius:6, padding:'8px 12px', color:'#111', cursor:uploadLoading?'default':'pointer', fontSize:11, fontWeight:800, whiteSpace:'nowrap' }}>
@@ -1666,7 +1732,7 @@ Return a concise intelligence summary, recurring themes, specific public posts o
                 <div style={{ display:'flex', justifyContent:'space-between', gap:10, alignItems:'flex-start', marginBottom:12 }}>
                   <div>
                     <div style={{ color:'#f0f0f0', fontSize:14, fontWeight:800, marginBottom:3 }}>
-                      {manualData.source === 'pdf' ? 'Here’s what we read from your PDF' : manualData.source === 'pdf-failed' ? 'PDF extraction failed — enter the numbers manually' : 'Manual Brand24 entry'}
+                      {manualData.source === 'pdf' ? 'Here’s what we read from your PDF' : manualData.source === 'pdf-failed' ? 'PDF extraction failed — enter the numbers manually' : 'Manual tracking entry'}
                     </div>
                     <div style={{ color:'#777', fontSize:11 }}>{manualData.fileName} · Confidence: {manualData.confidence || 'manual'}</div>
                   </div>
@@ -1703,7 +1769,7 @@ Return a concise intelligence summary, recurring themes, specific public posts o
                   ))}
                 </div>
                 <div style={{ display:'flex', justifyContent:'space-between', gap:12, alignItems:'center', marginTop:14, paddingTop:12, borderTop:'1px solid #222' }}>
-                  <p style={{ color:'#777', fontSize:11, lineHeight:1.5, margin:0 }}>Confirm only after checking these against the Brand24 dashboard/PDF. These headline metrics become the verified report numbers.</p>
+                  <p style={{ color:'#777', fontSize:11, lineHeight:1.5, margin:0 }}>Confirm only after checking these against the tracking dashboard or export. These headline metrics become the verified report numbers.</p>
                   <button type="button" onClick={confirmManualAndRun} style={{ background:'#ffda75', color:'#111', border:'none', borderRadius:6, padding:'11px 15px', fontSize:12, fontWeight:900, cursor:'pointer', whiteSpace:'nowrap' }}>Confirm & Run →</button>
                 </div>
               </div>
@@ -1713,7 +1779,7 @@ Return a concise intelligence summary, recurring themes, specific public posts o
           <div style={{ background:'#0a0a0a', border:'1px solid #1a1a1a', borderRadius:8, padding:14 }}>
             <div style={{ color:'#555', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:6, fontFamily:"'JetBrains Mono',monospace" }}>Environment</div>
             <p style={{ color:'#2e2e2e', fontSize:11, fontFamily:"'JetBrains Mono',monospace", lineHeight:1.7 }}>
-              // ANTHROPIC_API_KEY → Claude + Brand24 MCP auth<br/>
+              // ANTHROPIC_API_KEY → Claude synthesis auth<br/>
               // XAI_API_KEY → Grok x_search + web_search<br/>
               // Set in Vercel Dashboard → Environment Variables
             </p>
@@ -1721,7 +1787,7 @@ Return a concise intelligence summary, recurring themes, specific public posts o
 
           {error && <div style={{ color:'#ff6666', fontSize:13, padding:'12px 16px', background:'#1a0000', borderRadius:6 }}>{error}</div>}
 
-          <button onClick={run} style={{ background:LIME, color:'#000', border:'none', borderRadius:6, padding:'16px 24px', fontSize:17, fontWeight:700, cursor:'pointer', letterSpacing:'0.06em', fontFamily:"'Barlow Condensed',sans-serif", textTransform:'uppercase' }}>
+          <button onClick={() => run()} style={{ background:LIME, color:'#000', border:'none', borderRadius:6, padding:'16px 24px', fontSize:17, fontWeight:700, cursor:'pointer', letterSpacing:'0.06em', fontFamily:"'Barlow Condensed',sans-serif", textTransform:'uppercase' }}>
             Run Signal Intel Pipeline →
           </button>
         </div>
@@ -1734,7 +1800,7 @@ Return a concise intelligence summary, recurring themes, specific public posts o
     <div style={{ minHeight:'100vh', display:'flex', alignItems:'center', justifyContent:'center', padding:24 }}>
       <div style={{ width:'100%', maxWidth:500 }}>
         <div style={{ textAlign:'center', marginBottom:32 }}>
-          <div style={{ color:LIME, fontFamily:"'JetBrains Mono',monospace", fontSize:10, letterSpacing:'0.2em', marginBottom:8 }}>PIPELINE · {done}/6 · BRAND24 MCP + GROK</div>
+          <div style={{ color:LIME, fontFamily:"'JetBrains Mono',monospace", fontSize:10, letterSpacing:'0.2em', marginBottom:8 }}>PIPELINE · {done}/6 · LIVE MONITORING + GROK</div>
           <h2 style={{ fontFamily:"'Barlow Condensed',sans-serif", fontSize:30, fontWeight:700, margin:'0 0 6px' }}>Analyzing {brand}</h2>
           <p style={{ color:'#444', fontSize:13 }}>{period}</p>
           <div style={{ marginTop:14, height:3, background:'#1a1a1a', borderRadius:2, maxWidth:280, margin:'14px auto 0' }}>
@@ -1794,17 +1860,17 @@ Return a concise intelligence summary, recurring themes, specific public posts o
 
         {/* Metrics */}
         <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, marginBottom:14 }}>
-          <Metric label="Total Mentions" value={fmt(displayMetrics.mentions.total)} sub={manualVerified?`Manually verified · ${displayMetrics.manualFileName || 'Brand24 PDF'}`:hasB24?`Brand24 live · ${displayMetrics.projectName||''}`:useEastWestDemo?'EastWest demo report':'No Brand24 project'}/>
-          <Metric label="Total Reach" value={fmt(displayMetrics.totalReach)} sub={manualVerified?'Confirmed Brand24 export':"30-day period"}/>
+          <Metric label="Total Mentions" value={fmt(displayMetrics.mentions.total)} sub={manualVerified?`Manually verified · ${displayMetrics.manualFileName || 'monitoring export'}`:hasB24?`Live tracking · ${displayMetrics.projectName||''}`:useEastWestDemo?'EastWest demo report':'No tracking source'}/>
+          <Metric label="Total Reach" value={fmt(displayMetrics.totalReach)} sub={manualVerified?'Confirmed tracking export':"30-day period"}/>
           <Metric label="Daily Avg" value={displayMetrics.mentions.dailyAvg}/>
         </div>
 
         {/* Spike Drivers */}
         <div style={{ ...CARD, marginBottom:14 }}>
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
-            <div style={{ color:'#666', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase' }}>Spike Drivers · {hasGrok?'Grok-grounded':'Brand24-grounded'}</div>
+            <div style={{ color:'#666', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase' }}>Spike Drivers · {hasGrok?'Grok-grounded':'monitoring-grounded'}</div>
             <div style={{ display:'flex', gap:6 }}>
-              {hasB24 && <span style={{ background:`${LIME}18`, border:`1px solid ${LIME}30`, borderRadius:10, padding:'2px 8px', fontSize:9, color:LIME }}>B24 ✓</span>}
+              {hasB24 && <span style={{ background:`${LIME}18`, border:`1px solid ${LIME}30`, borderRadius:10, padding:'2px 8px', fontSize:9, color:LIME }}>LIVE ✓</span>}
               {hasGrok && <span style={{ background:'#1DA1F222', border:'1px solid #1DA1F244', borderRadius:10, padding:'2px 8px', fontSize:9, color:'#1DA1F2' }}>GROK ✓</span>}
             </div>
           </div>
@@ -1818,14 +1884,14 @@ Return a concise intelligence summary, recurring themes, specific public posts o
         {/* Sentiment + Events */}
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:14 }}>
           <div style={CARD}>
-            <div style={{ color:'#666', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:12 }}>Sentiment · Brand24</div>
+            <div style={{ color:'#666', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:12 }}>Sentiment · Live Monitoring</div>
             <SentBar label="Positive" count={displayMetrics.sentiment.positive.count} pct={displayMetrics.sentiment.positive.pct} color="#44ff88" onClick={() => searchSentiment('Positive')}/>
             <SentBar label="Neutral"  count={displayMetrics.sentiment.neutral.count}  pct={displayMetrics.sentiment.neutral.pct}  color="#555" onClick={() => searchSentiment('Neutral')}/>
             <SentBar label="Negative" count={displayMetrics.sentiment.negative.count} pct={displayMetrics.sentiment.negative.pct} color="#ff6666" onClick={() => searchSentiment('Negative')}/>
             <p style={{ color:'#555', fontSize:12, margin:'10px 0 0', lineHeight:1.65 }}>{displaySentimentNarrative}</p>
           </div>
           <div style={CARD}>
-            <div style={{ color:'#666', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:12 }}>Brand24 Events · Context Scout</div>
+            <div style={{ color:'#666', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:12 }}>Monitoring Events · Context Scout</div>
             {displayEvents.length > 0
               ? displayEvents.slice(0,3).map((e,i) => (
                 <div key={i} style={{ marginBottom:10 }}>
@@ -1852,7 +1918,7 @@ Return a concise intelligence summary, recurring themes, specific public posts o
         {/* Topics */}
         {context?.topTopics?.length > 0 && (
           <div style={{ ...CARD, marginBottom:14 }}>
-            <div style={{ color:'#666', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:12 }}>Topic Clusters · Brand24 AI</div>
+            <div style={{ color:'#666', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:12 }}>Topic Clusters · Signal AI</div>
             <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:8 }}>
               {context.topTopics.slice(0,6).map((t,i) => (
                 <div key={i} style={{ background:'#0d0d0d', border:'1px solid #1a1a1a', borderRadius:8, padding:'10px 12px' }}>
@@ -1866,12 +1932,12 @@ Return a concise intelligence summary, recurring themes, specific public posts o
 
         {/* SOV */}
         <div style={{ ...CARD, marginBottom:14 }}>
-          <div style={{ color:'#666', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:12 }}>Share of Voice · Verified Metrics (Brand24)</div>
+          <div style={{ color:'#666', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:12 }}>Share of Voice · Verified Metrics</div>
           {competitive.sovData?.map((s,i) => <SOVRow key={i} {...s}/>)}
           {competitive.sovData?.some(s => !s.found) && (
             <div style={{ marginTop:12, padding:'10px 14px', background:'#0a0a0a', borderRadius:6, border:'1px solid #1e1e1e' }}>
               <p style={{ color:'#444', fontSize:11, fontFamily:"'JetBrains Mono',monospace", margin:0 }}>
-                // Missing brands need Brand24 projects → <a href="https://app.brand24.com" target="_blank" rel="noreferrer" style={{ color:LIME, textDecoration:'none' }}>app.brand24.com</a>
+                // Missing brands need tracking sources → <a href="/setup" style={{ color:LIME, textDecoration:'none' }}>Create source</a>
               </p>
             </div>
           )}
@@ -1882,7 +1948,7 @@ Return a concise intelligence summary, recurring themes, specific public posts o
         {/* Competitor notes */}
         {competitive.competitorNotes?.length > 0 && (
           <div style={{ ...CARD, marginBottom:14 }}>
-            <div style={{ color:'#666', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:12 }}>Competitor Intelligence · B24 + Grok</div>
+            <div style={{ color:'#666', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:12 }}>Competitor Intelligence · Live + Grok</div>
             <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(220px, 1fr))', gap:10 }}>
               {competitive.competitorNotes.map((c,i) => (
                 <div key={i} style={{ background:'#0d0d0d', border:'1px solid #1a1a1a', borderRadius:8, padding:'12px 14px' }}>
@@ -1935,7 +2001,7 @@ Return a concise intelligence summary, recurring themes, specific public posts o
 
         {/* Footer */}
         <div style={{ paddingTop:14, borderTop:'1px solid #141414', display:'flex', justifyContent:'space-between' }}>
-          <span style={{ color:'#2a2a2a', fontSize:11, fontFamily:"'JetBrains Mono',monospace" }}>// Brand24 MCP + Grok · {hasB24?'Live primary data':manualVerified?'Manual primary + live competitor data':'Set up Brand24 project for live data'}</span>
+          <span style={{ color:'#2a2a2a', fontSize:11, fontFamily:"'JetBrains Mono',monospace" }}>// Signal Intel + Grok · {hasB24?'Live primary data':manualVerified?'Manual primary + live competitor data':'Set up tracking source for live data'}</span>
           <span style={{ color:'#2a2a2a', fontSize:11 }}>Signal Intel v3 · Praxis Experiential</span>
         </div>
 

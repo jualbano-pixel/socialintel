@@ -28,7 +28,7 @@ function buildFallbackResponse({ file, extractedText, diagnostics, warning }) {
     ...fallback.warnings,
   ];
   return Response.json({
-    fileName: file.name || 'Brand24 export.pdf',
+    fileName: file.name || 'monitoring export.pdf',
     uploadDate: new Date().toISOString(),
     extracted: fallback,
     diagnostics,
@@ -141,7 +141,7 @@ function fallbackExtractFromText(text) {
     topMentions: fallbackTopMentions(text),
     sourceNarrative: '',
     confidence: 'low',
-    warnings: ['Claude extraction was unavailable; fields were prefilled from Brand24 text labels. Confirm every value before running.'],
+    warnings: ['Claude extraction was unavailable; fields were prefilled from monitoring export labels. Confirm every value before running.'],
   });
 }
 
@@ -163,7 +163,7 @@ function fallbackTopMentions(text) {
     .filter(line => line.length > 12)
     .slice(0, 6)
     .map((line, i) => ({
-      source: line.match(/\b(tiktok|instagram|facebook|x\.com|twitter|youtube|news|web)\b/i)?.[0] || 'Brand24 PDF',
+      source: line.match(/\b(tiktok|instagram|facebook|x\.com|twitter|youtube|news|web)\b/i)?.[0] || 'Monitoring export',
       title: line.slice(0, 90),
       meta: '',
       sentiment: line.match(/\bpositive\b/i) ? 'Positive' : line.match(/\bnegative\b/i) ? 'Negative' : 'Neutral',
@@ -214,7 +214,7 @@ export async function POST(request) {
     const form = await request.formData();
     const file = form.get('file');
     if (!file || typeof file.arrayBuffer !== 'function') {
-      return Response.json({ error: 'Upload a Brand24 PDF file.' }, { status: 400 });
+      return Response.json({ error: 'Upload a monitoring export PDF file.' }, { status: 400 });
     }
     if (file.type && file.type !== 'application/pdf') {
       return Response.json({ error: 'Only PDF uploads are supported.' }, { status: 400 });
@@ -239,7 +239,7 @@ export async function POST(request) {
     });
     if (!extractedText || extractedText.length < 80) {
       return Response.json({
-        error: `Could not read enough text from this PDF (${extractedText.length} characters). Please enter the Brand24 numbers manually.`,
+        error: `Could not read enough text from this PDF (${extractedText.length} characters). Please enter the monitoring export numbers manually.`,
         diagnostics,
       }, { status: 422 });
     }
@@ -257,7 +257,7 @@ export async function POST(request) {
         max_tokens: 2500,
         messages: [{
           role: 'user',
-          content: `Extract Brand24 dashboard PDF metrics from the text below.
+          content: `Extract monitoring dashboard PDF metrics from the text below.
 
 Your entire response must be one valid JSON object. Do not include markdown, prose, code fences, analysis, or trailing commentary. If a field is not cleanly extractable, use null, an empty string, or an empty array inside the JSON.
 
@@ -278,7 +278,7 @@ Return this exact JSON shape:
   "warnings": ["short warning for any unclear or missing field"]
 }
 
-Use Brand24 labels such as Total mentions, Total reach, Positive mentions, Negative mentions, Average Presence Score, and AVE. If a value is missing or ambiguous, use null and add a warning. Do not invent numbers.
+Use monitoring export labels such as Total mentions, Total reach, Positive mentions, Negative mentions, Average Presence Score, and AVE. If a value is missing or ambiguous, use null and add a warning. Do not invent numbers.
 Extract Top Mentions only from the uploaded PDF text. Do not reuse examples from another brand.
 
 PDF TEXT:
@@ -324,7 +324,7 @@ ${extractedText.slice(0, 45000)}`,
         diagnostics,
         warning: {
           diagnostic: 'fallback=label-parser-after-non-json-claude-response',
-          message: 'Claude returned a non-JSON extraction response. Core fields were prefilled from Brand24 text labels instead.',
+          message: 'Claude returned a non-JSON extraction response. Core fields were prefilled from monitoring export text labels instead.',
         },
       });
     }
@@ -362,7 +362,7 @@ ${extractedText.slice(0, 45000)}`,
     });
 
     return Response.json({
-      fileName: file.name || 'Brand24 export.pdf',
+      fileName: file.name || 'monitoring export.pdf',
       uploadDate: new Date().toISOString(),
       extracted,
       diagnostics,
@@ -370,6 +370,6 @@ ${extractedText.slice(0, 45000)}`,
     });
   } catch (e) {
     console.error('extract-brand24-pdf error:', e);
-    return Response.json({ error: e.message || 'Failed to extract Brand24 PDF.', diagnostics }, { status: 500 });
+    return Response.json({ error: e.message || 'Failed to extract monitoring export PDF.', diagnostics }, { status: 500 });
   }
 }
