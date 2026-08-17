@@ -7,17 +7,17 @@ export default function LoginPage({ searchParams }) {
   const nextPath = typeof searchParams?.next === 'string' ? searchParams.next : '/';
 
   return (
-    <main style={{ minHeight:'100vh', display:'grid', placeItems:'center', padding:24, background:'#050505', color:'#f0f0f0' }}>
-      <form action="/auth/login" method="post" style={{ width:'100%', maxWidth:380, background:'#0b0b0b', border:'1px solid #25200f', borderRadius:10, padding:'26px 28px', boxShadow:'0 20px 60px rgba(0,0,0,0.35)' }}>
-        <div style={{ color:'#CCFF00', fontFamily:"'JetBrains Mono', monospace", fontSize:10, letterSpacing:'0.18em', textTransform:'uppercase', marginBottom:8 }}>
+    <main style={{ minHeight:'100vh', display:'grid', placeItems:'center', padding:24, background:'var(--bg-primary)', color:'var(--text-primary)' }}>
+      <form action="/auth/login" method="post" style={{ width:'100%', maxWidth:380, background:'var(--bg-surface)', border:'1px solid var(--border)', borderRadius:10, padding:'26px 28px' }}>
+        <div style={{ color:'var(--accent-live)', fontFamily:"'JetBrains Mono', monospace", fontSize:10, letterSpacing:'0.18em', textTransform:'uppercase', marginBottom:8 }}>
           Signal Intel Demo
         </div>
         <h1 style={{ fontFamily:"'Barlow Condensed', sans-serif", fontSize:32, lineHeight:1, margin:'0 0 8px' }}>Team Access</h1>
-        <p style={{ color:'#777', fontSize:13, lineHeight:1.6, margin:'0 0 22px' }}>
+        <p style={{ color:'var(--text-muted)', fontSize:13, lineHeight:1.6, margin:'0 0 22px' }}>
           Enter the shared Praxis demo password to continue.
         </p>
         <input type="hidden" name="next" value={nextPath} />
-        <label style={{ display:'block', color:'#666', fontSize:10, letterSpacing:'0.15em', textTransform:'uppercase', marginBottom:8 }}>
+        <label style={{ display:'block', color:'var(--text-muted)', fontSize:10, letterSpacing:'0.15em', textTransform:'uppercase', marginBottom:8 }}>
           Password
         </label>
         <input
@@ -26,14 +26,14 @@ export default function LoginPage({ searchParams }) {
           autoComplete="current-password"
           autoFocus
           required
-          style={{ width:'100%', boxSizing:'border-box', background:'#111', border:'1px solid #2a2a2a', borderRadius:6, padding:'12px 14px', color:'#f0f0f0', fontSize:15, marginBottom:12 }}
+          style={{ width:'100%', boxSizing:'border-box', background:'var(--bg-surface-subtle)', border:'1px solid var(--border-strong)', borderRadius:6, padding:'12px 14px', color:'var(--text-primary)', fontSize:15, marginBottom:12 }}
         />
         {hasError && (
-          <div style={{ color:'#ffb0b0', fontSize:12, lineHeight:1.55, background:'#1a0000', border:'1px solid #ff444433', borderRadius:6, padding:'9px 11px', marginBottom:12 }}>
+          <div style={{ color:'var(--accent-negative)', fontSize:12, lineHeight:1.55, background:'var(--bg-panel-negative)', border:'1px solid var(--accent-negative-border)', borderRadius:6, padding:'9px 11px', marginBottom:12 }}>
             Incorrect password. Please try again.
           </div>
         )}
-        <button type="submit" style={{ width:'100%', background:'#CCFF00', border:'1px solid #CCFF00', borderRadius:6, padding:'12px 14px', color:'#111', cursor:'pointer', fontSize:13, fontWeight:800 }}>
+        <button type="submit" style={{ width:'100%', background:'var(--accent-live)', border:'1px solid var(--accent-live)', borderRadius:6, padding:'12px 14px', color:'var(--text-inverse)', cursor:'pointer', fontSize:13, fontWeight:800 }}>
           Continue
         </button>
       </form>

@@ -1,9 +1,10 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import ThemeToggle from '../theme-toggle';
 
-const LIME = '#CCFF00';
-const CARD = { background: '#111', border: '1px solid #222', borderRadius: 8, padding: 18 };
+const LIME = 'var(--accent-live)';
+const CARD = { background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 8, padding: 18 };
 const LANGUAGES = ['', 'english', 'indonesian', 'thai', 'vietnamese', 'spanish', 'french', 'german', 'korean'];
 
 function blankMonitor(role = 'competitor') {
@@ -35,14 +36,14 @@ function normalizeMonitor(monitor) {
 function Field({ label, children }) {
   return (
     <label style={{ display: 'block' }}>
-      <span style={{ display: 'block', color: '#777', fontSize: 10, letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 7 }}>{label}</span>
+      <span style={{ display: 'block', color: 'var(--text-muted)', fontSize: 10, letterSpacing: '0.12em', textTransform: 'uppercase', marginBottom: 7 }}>{label}</span>
       {children}
     </label>
   );
 }
 
 function TextInput(props) {
-  return <input {...props} style={{ width: '100%', background: '#0b0b0b', border: '1px solid #2a2a2a', borderRadius: 6, color: '#f0f0f0', padding: '11px 12px', fontSize: 13, ...(props.style || {}) }} />;
+  return <input {...props} style={{ width: '100%', background: 'var(--bg-surface-subtle)', border: '1px solid var(--border-strong)', borderRadius: 6, color: 'var(--text-primary)', padding: '11px 12px', fontSize: 13, ...(props.style || {}) }} />;
 }
 
 function MonitorEditor({ monitor, index, onChange, onRemove, canRemove }) {
@@ -57,12 +58,12 @@ function MonitorEditor({ monitor, index, onChange, onRemove, canRemove }) {
     <div style={CARD}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'center', marginBottom: 14 }}>
         <div>
-          <div style={{ color: monitor.role === 'primary' ? LIME : '#aaa', fontSize: 10, letterSpacing: '0.15em', textTransform: 'uppercase', fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>
+          <div style={{ color: monitor.role === 'primary' ? LIME : 'var(--text-muted)', fontSize: 10, letterSpacing: '0.15em', textTransform: 'uppercase', fontFamily: "'JetBrains Mono',monospace", marginBottom: 4 }}>
             {monitor.role === 'primary' ? 'Primary Monitor' : `Competitor Monitor ${index}`}
           </div>
-          <div style={{ color: '#666', fontSize: 12 }}>Competitors are created as separate linked monitors.</div>
+          <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>Competitors are created as separate linked monitors.</div>
         </div>
-        {canRemove && <button type="button" onClick={onRemove} style={{ background: '#171717', color: '#999', border: '1px solid #333', borderRadius: 6, padding: '7px 10px', cursor: 'pointer' }}>Remove</button>}
+        {canRemove && <button type="button" onClick={onRemove} style={{ background: 'var(--bg-surface-muted)', color: 'var(--text-muted)', border: '1px solid var(--text-faint)', borderRadius: 6, padding: '7px 10px', cursor: 'pointer' }}>Remove</button>}
       </div>
 
       <Field label="Monitor Name">
@@ -71,7 +72,7 @@ function MonitorEditor({ monitor, index, onChange, onRemove, canRemove }) {
 
       <div style={{ display: 'grid', gap: 10, marginTop: 12 }}>
         {monitor.keywords.map((keyword, keywordIndex) => (
-          <div key={keywordIndex} style={{ background: '#0c0c0c', border: '1px solid #1f1f1f', borderRadius: 8, padding: 12 }}>
+          <div key={keywordIndex} style={{ background: 'var(--bg-surface-subtle)', border: '1px solid var(--border-subtle)', borderRadius: 8, padding: 12 }}>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: 8, alignItems: 'end' }}>
               <Field label="Track Mentions Of">
                 <TextInput value={keyword.keyword} onChange={e => updateKeyword(keywordIndex, 'keyword', e.target.value)} placeholder="netflix" />
@@ -82,12 +83,12 @@ function MonitorEditor({ monitor, index, onChange, onRemove, canRemove }) {
               <Field label="Exclude Mentions With">
                 <TextInput value={keyword.excludedText} onChange={e => updateKeyword(keywordIndex, 'excludedText', e.target.value)} placeholder="jobs, hiring" />
               </Field>
-              <button type="button" onClick={() => removeKeyword(keywordIndex)} disabled={monitor.keywords.length === 1} style={{ height: 39, minWidth: 39, background: '#151515', color: '#777', border: '1px solid #303030', borderRadius: 6, padding: '0 10px', cursor: monitor.keywords.length === 1 ? 'default' : 'pointer' }}>×</button>
+              <button type="button" onClick={() => removeKeyword(keywordIndex)} disabled={monitor.keywords.length === 1} style={{ height: 39, minWidth: 39, background: 'var(--bg-surface-muted)', color: 'var(--text-muted)', border: '1px solid var(--border-strong)', borderRadius: 6, padding: '0 10px', cursor: monitor.keywords.length === 1 ? 'default' : 'pointer' }}>×</button>
             </div>
           </div>
         ))}
       </div>
-      <button type="button" onClick={addKeyword} style={{ marginTop: 10, background: '#161616', color: LIME, border: `1px solid ${LIME}44`, borderRadius: 6, padding: '9px 12px', cursor: 'pointer', fontSize: 12, fontWeight: 800 }}>+ Add keyword rule</button>
+      <button type="button" onClick={addKeyword} style={{ marginTop: 10, background: 'var(--bg-surface-muted)', color: LIME, border: `1px solid var(--accent-live-border)`, borderRadius: 6, padding: '9px 12px', cursor: 'pointer', fontSize: 12, fontWeight: 800 }}>+ Add keyword rule</button>
     </div>
   );
 }
@@ -144,15 +145,18 @@ export default function SetupPage() {
   };
 
   return (
-    <main style={{ minHeight: '100vh', padding: '34px 22px', color: '#f0f0f0' }}>
+    <main style={{ minHeight: '100vh', padding: '34px 22px', color: 'var(--text-primary)' }}>
       <div style={{ maxWidth: 980, margin: '0 auto' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 18, alignItems: 'flex-start', marginBottom: 24 }}>
           <div>
             <div style={{ color: LIME, fontFamily: "'JetBrains Mono',monospace", fontSize: 10, letterSpacing: '0.2em', marginBottom: 8 }}>SIGNAL INTEL · SETUP</div>
             <h1 style={{ fontFamily: "'Barlow Condensed',sans-serif", fontSize: 42, margin: 0 }}>New Tracking Source</h1>
-            <p style={{ color: '#777', fontSize: 13, lineHeight: 1.6, margin: '6px 0 0' }}>Create linked monitors for a primary brand and its competitors, then save the report settings Signal Intel needs for the first pull.</p>
+            <p style={{ color: 'var(--text-muted)', fontSize: 13, lineHeight: 1.6, margin: '6px 0 0' }}>Create linked monitors for a primary brand and its competitors, then save the report settings Signal Intel needs for the first pull.</p>
           </div>
-          <a href="/" style={{ color: '#999', border: '1px solid #2a2a2a', borderRadius: 6, padding: '9px 12px', textDecoration: 'none', fontSize: 12 }}>Back to Reports</a>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+            <ThemeToggle />
+            <a href="/" style={{ color: 'var(--text-muted)', border: '1px solid var(--border-strong)', borderRadius: 6, padding: '9px 12px', textDecoration: 'none', fontSize: 12 }}>Back to Reports</a>
+          </div>
         </div>
 
         <form onSubmit={submit} style={{ display: 'grid', gap: 14 }}>
@@ -160,12 +164,12 @@ export default function SetupPage() {
             <Field label="Initial Pull From"><TextInput type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} /></Field>
             <Field label="Initial Pull To"><TextInput type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} /></Field>
             <Field label="Language">
-              <select value={language} onChange={e => setLanguage(e.target.value)} style={{ width: '100%', background: '#0b0b0b', border: '1px solid #2a2a2a', borderRadius: 6, color: '#f0f0f0', padding: '11px 12px', fontSize: 13 }}>
+              <select value={language} onChange={e => setLanguage(e.target.value)} style={{ width: '100%', background: 'var(--bg-surface-subtle)', border: '1px solid var(--border-strong)', borderRadius: 6, color: 'var(--text-primary)', padding: '11px 12px', fontSize: 13 }}>
                 {LANGUAGES.map(item => <option key={item || 'all'} value={item}>{item || 'All languages'}</option>)}
               </select>
             </Field>
             <Field label="Market Filter">
-              <button type="button" onClick={() => setPhilippinesOnly(value => !value)} style={{ width: '100%', height: 41, background: philippinesOnly ? `${LIME}22` : '#0b0b0b', color: philippinesOnly ? LIME : '#777', border: `1px solid ${philippinesOnly ? `${LIME}66` : '#2a2a2a'}`, borderRadius: 6, cursor: 'pointer', fontWeight: 800 }}>
+              <button type="button" onClick={() => setPhilippinesOnly(value => !value)} style={{ width: '100%', height: 41, background: philippinesOnly ? 'var(--accent-live-soft)' : 'var(--bg-surface-subtle)', color: philippinesOnly ? LIME : 'var(--text-muted)', border: `1px solid ${philippinesOnly ? 'var(--accent-live-border)' : 'var(--border-strong)'}`, borderRadius: 6, cursor: 'pointer', fontWeight: 800 }}>
                 {philippinesOnly ? 'Philippines only' : 'All markets'}
               </button>
             </Field>
@@ -186,21 +190,21 @@ export default function SetupPage() {
           ))}
 
           <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, flexWrap: 'wrap' }}>
-            <button type="button" onClick={addCompetitor} style={{ background: '#161616', color: '#aaa', border: '1px solid #333', borderRadius: 6, padding: '12px 15px', cursor: 'pointer', fontWeight: 800 }}>+ Add competitor monitor</button>
-            <button disabled={loading} style={{ background: loading ? '#222' : LIME, color: '#000', border: 'none', borderRadius: 6, padding: '13px 20px', cursor: loading ? 'default' : 'pointer', fontWeight: 900 }}>
+            <button type="button" onClick={addCompetitor} style={{ background: 'var(--bg-surface-muted)', color: 'var(--text-muted)', border: '1px solid var(--text-faint)', borderRadius: 6, padding: '12px 15px', cursor: 'pointer', fontWeight: 800 }}>+ Add competitor monitor</button>
+            <button disabled={loading} style={{ background: loading ? 'var(--bg-surface-muted)' : LIME, color: 'var(--text-inverse)', border: 'none', borderRadius: 6, padding: '13px 20px', cursor: loading ? 'default' : 'pointer', fontWeight: 900 }}>
               {loading ? 'Creating...' : 'Create Tracking Sources'}
             </button>
           </div>
         </form>
 
-        {error && <div style={{ marginTop: 14, background: '#1a0000', border: '1px solid #ff444433', color: '#ff9a9a', borderRadius: 8, padding: 12, fontSize: 13 }}>{error}</div>}
+        {error && <div style={{ marginTop: 14, background: 'var(--bg-panel-negative)', border: '1px solid var(--accent-negative-border)', color: 'var(--accent-negative)', borderRadius: 8, padding: 12, fontSize: 13 }}>{error}</div>}
         {result && (
-          <div style={{ marginTop: 14, background: '#0d1608', border: `1px solid ${LIME}44`, borderRadius: 8, padding: 16 }}>
+          <div style={{ marginTop: 14, background: 'var(--bg-panel-positive)', border: `1px solid var(--accent-live-border)`, borderRadius: 8, padding: 16 }}>
             <div style={{ color: LIME, fontSize: 10, letterSpacing: '0.16em', textTransform: 'uppercase', fontFamily: "'JetBrains Mono',monospace", marginBottom: 8 }}>Setup Created</div>
-            <div style={{ color: '#d6d6d6', fontSize: 14, marginBottom: 10 }}>{result.monitors.length} linked monitor{result.monitors.length === 1 ? '' : 's'} are ready for Signal Intel.</div>
+            <div style={{ color: 'var(--text-secondary)', fontSize: 14, marginBottom: 10 }}>{result.monitors.length} linked monitor{result.monitors.length === 1 ? '' : 's'} are ready for Signal Intel.</div>
             <div style={{ display: 'grid', gap: 7 }}>
               {result.monitors.map(item => (
-                <div key={`${item.role}-${item.name}`} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, background: '#0b0b0b', border: '1px solid #202020', borderRadius: 6, padding: '9px 10px', fontSize: 12 }}>
+                <div key={`${item.role}-${item.name}`} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, background: 'var(--bg-surface-subtle)', border: '1px solid var(--border)', borderRadius: 6, padding: '9px 10px', fontSize: 12 }}>
                   <span>{item.role === 'primary' ? 'Primary' : 'Competitor'} · {item.name}</span>
                   <span style={{ color: LIME, fontFamily: "'JetBrains Mono',monospace", fontSize: 10 }}>READY</span>
                 </div>

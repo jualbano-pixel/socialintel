@@ -2,6 +2,8 @@ import { listProjects, getMentions, getMentionsReach } from '../../../lib/brand2
 
 const SOURCE_COLORS = ['#2f86de', '#dc37a5', '#e74c3c', '#f78fb3', '#33b6b4', '#7155d9', '#f4d03f', '#7ed6df'];
 const SOCIAL_CATEGORIES = new Set(['facebook', 'instagram', 'tiktok', 'twitter', 'x', 'youtube', 'reddit', 'socialmedia']);
+const SNAPSHOT_STAGE_TIMEOUT_MS = 60000;
+const LIVE_MENTION_SAMPLE_LIMIT = 2500;
 
 export function brandKey(value) {
   return String(value || '')
@@ -142,7 +144,8 @@ function applyCountryFilter(mentions, countryFilter) {
   };
 }
 
-export function summarizeMentions({ brand, project, mentions, reach, dateFrom, dateTo, pages, countryFilter }) {
+export function summarizeMentions({ brand, project, mentions, reach, dateFrom, dateTo, pages, countryFilter, mentionPull = {} }) {
+  const rawPulledMentions = mentions.length;
   mentions = mentions.filter(mention => {
     const date = mentionDate(mention);
     if (!date) return true;
@@ -224,6 +227,10 @@ export function summarizeMentions({ brand, project, mentions, reach, dateFrom, d
       dateTo,
       pages,
       pulledMentions: mentions.length,
+      rawPulledMentions,
+      mentionSampleLimit: mentionPull.maxMentions || '',
+      mentionSampleCapped: !!mentionPull.capped,
+      hasMoreMentionPages: !!mentionPull.hasMore,
       socialMediaReach,
       nonSocialMediaReach,
       countryFilterRequested: countryFilterDiagnostics.countryFilterRequested,
@@ -233,12 +240,15 @@ export function summarizeMentions({ brand, project, mentions, reach, dateFrom, d
       filteredOutMentions: countryFilterDiagnostics.filteredOutMentions,
       mentionsWithCountry: countryFilterDiagnostics.mentionsWithCountry,
       reachCountryFiltered: false,
+      reachFallbackReason: reach?.fallbackReason || '',
     },
   };
 }
 
 export async function getLiveSnapshot({ accountId, brand, aliases = [], dateFrom, dateTo, filters = {}, countryFilter = '' }) {
+  console.info('[Tracking live snapshot] project list start', { brand, dateFrom, dateTo, countryFilter });
   const projects = await listProjects(accountId);
+  console.info('[Tracking live snapshot] project list done', { brand, dateFrom, dateTo, projectCount: projects.length });
   const project = resolveProject(projects, brand, aliases);
   console.info('[Tracking live snapshot] project resolution', {
     brand,
@@ -271,23 +281,103 @@ export async function getLiveSnapshot({ accountId, brand, aliases = [], dateFrom
     };
   }
 
-  const [mentionsResult, reach] = await Promise.all([
-    getMentions(itemId(project), dateFrom, dateTo, filters),
-    getMentionsReach(itemId(project), dateFrom, dateTo),
-  ]);
+  const projectId = itemId(project);
+  const projectName = itemName(project);
+  let mentionsResult;
+  let reach;
+
+  try {
+    console.info('[Tracking live snapshot] mentions stage start', { brand, projectId, projectName, dateFrom, dateTo });
+    mentionsResult = await getMentions(projectId, dateFrom, dateTo, {
+      ...filters,
+      timeoutMs: SNAPSHOT_STAGE_TIMEOUT_MS,
+      maxMentions: LIVE_MENTION_SAMPLE_LIMIT,
+      logger: console,
+    });
+    console.info('[Tracking live snapshot] mentions stage done', {
+      brand,
+      projectId,
+      projectName,
+      dateFrom,
+      dateTo,
+      pages: mentionsResult.pages,
+      mentions: mentionsResult.mentions.length,
+      capped: mentionsResult.capped,
+      hasMore: mentionsResult.hasMore,
+    });
+  } catch (error) {
+    console.error('[Tracking live snapshot] mentions stage error', {
+      brand,
+      projectId,
+      projectName,
+      dateFrom,
+      dateTo,
+      message: error.message,
+      code: error.code,
+      status: error.status,
+    });
+    throw error;
+  }
+
+  try {
+    console.info('[Tracking live snapshot] reach stage start', { brand, projectId, projectName, dateFrom, dateTo });
+    reach = await getMentionsReach(projectId, dateFrom, dateTo, {
+      timeoutMs: SNAPSHOT_STAGE_TIMEOUT_MS,
+      logger: console,
+    });
+    console.info('[Tracking live snapshot] reach stage done', {
+      brand,
+      projectId,
+      projectName,
+      dateFrom,
+      dateTo,
+      totalReach: reach.totalReach,
+      socialMediaReach: reach.socialMediaReachTotal,
+      nonSocialMediaReach: reach.nonSocialMediaReachTotal,
+    });
+  } catch (error) {
+    console.error('[Tracking live snapshot] reach stage error', {
+      brand,
+      projectId,
+      projectName,
+      dateFrom,
+      dateTo,
+      message: error.message,
+      code: error.code,
+      status: error.status,
+    });
+    throw error;
+  }
+
   const { mentions, pages } = mentionsResult;
   console.info('[Tracking live snapshot] mentions pulled', {
     brand,
-    projectId: itemId(project),
-    projectName: itemName(project),
+    projectId,
+    projectName,
     dateFrom,
     dateTo,
     pages,
     mentions: mentions.length,
+    capped: mentionsResult.capped,
+    hasMoreMentionPages: mentionsResult.hasMore,
     totalReach: reach.totalReach,
     socialMediaReach: reach.socialMediaReachTotal,
     nonSocialMediaReach: reach.nonSocialMediaReachTotal,
     countryFilter,
   });
-  return summarizeMentions({ brand, project, mentions, reach, dateFrom, dateTo, pages, countryFilter });
+  return summarizeMentions({
+    brand,
+    project,
+    mentions,
+    reach,
+    dateFrom,
+    dateTo,
+    pages,
+    countryFilter,
+    mentionPull: {
+      maxMentions: LIVE_MENTION_SAMPLE_LIMIT,
+      capped: mentionsResult.capped,
+      hasMore: mentionsResult.hasMore,
+    },
+  });
 }

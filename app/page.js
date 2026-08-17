@@ -1,11 +1,12 @@
 'use client';
 import { useRef, useState } from 'react';
+import ThemeToggle from './theme-toggle';
 
-const LIME = '#CCFF00';
+const LIME = 'var(--accent-live)';
 const CLAUDE_MODEL = 'claude-sonnet-4-6';
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
 const fmt = n => n >= 1e9 ? `${(n/1e9).toFixed(1)}B` : n >= 1e6 ? `${(n/1e6).toFixed(1)}M` : n >= 1e3 ? `${(n/1e3).toFixed(1)}K` : String(n || 0);
-const CARD = { background: '#111', border: '1px solid #1e1e1e', borderRadius: 10, padding: '18px 22px' };
+const CARD = { background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 10, padding: '18px 22px' };
 const NETFLIX_STREAMING_COMPETITORS = ['Viu Philippines', 'Amazon Prime', 'HBO Max', 'iWant', 'Viva One'];
 const BRAND24_PROJECT_ALIASES = {
   'netflix philippines': ['netflix'],
@@ -352,6 +353,8 @@ function trackerAgent(d) {
       neutral: { count: neu, pct: overridePct(d.neutralPct, parseFloat((neu/totS*100).toFixed(1))) },
     },
     dailyStats: d.dailyStats || [], found: d.found, projectName: d.projectName,
+    mentionSampleCapped: !!d.diagnostics?.mentionSampleCapped,
+    mentionSampleLimit: d.diagnostics?.mentionSampleLimit,
     manualVerified: !!d.manualVerified,
     manualUploadDate: d.manualUploadDate,
     manualFileName: d.manualFileName,
@@ -704,15 +707,15 @@ const IDLE = { listener:'idle', tracker:'idle', context:'idle', analyst:'idle', 
 
 // ── UI COMPONENTS ─────────────────────────────────────────────
 function AgentPill({ agentKey, name, role, status }) {
-  const col = { idle:'#2a2a2a', running:LIME, done:'#44ff88' };
+  const col = { idle:'var(--border-strong)', running:LIME, done:'var(--accent-positive)' };
   const ico = { idle:'○', running:'◉', done:'✓' };
   return (
-    <div style={{ border:`1px solid ${status==='running'?LIME:status==='done'?'#1e3a1e':'#1a1a1a'}`, borderRadius:8, padding:'11px 14px', background:status==='running'?'#0d1100':status==='done'?'#0a140a':'#0d0d0d', transition:'all 0.3s', boxShadow:status==='running'?`0 0 12px ${LIME}18`:'none', marginBottom:7 }}>
+    <div style={{ border:`1px solid ${status==='running'?LIME:status==='done'?'var(--accent-live-border)':'var(--border-subtle)'}`, borderRadius:8, padding:'11px 14px', background:status==='running'?'var(--bg-panel-live)':status==='done'?'var(--bg-panel-positive)':'var(--bg-surface-muted)', transition:'all 0.3s', boxShadow:status==='running'?`0 0 12px var(--accent-live-softer)`:'none', marginBottom:7 }}>
       <div style={{ display:'flex', alignItems:'center', gap:10 }}>
         <span style={{ color:col[status]??LIME, fontSize:14, fontFamily:'monospace', animation:status==='running'?'pulse 1.2s infinite':'none' }}>{ico[status]??'○'}</span>
         <div style={{ flex:1 }}>
-          <div style={{ color:'#f0f0f0', fontSize:11, fontWeight:600, letterSpacing:'0.1em', textTransform:'uppercase' }}>{name}</div>
-          <div style={{ color:'#444', fontSize:10, marginTop:1 }}>{status==='running'?DETAILS[agentKey]:role}</div>
+          <div style={{ color:'var(--text-primary)', fontSize:11, fontWeight:600, letterSpacing:'0.1em', textTransform:'uppercase' }}>{name}</div>
+          <div style={{ color:'var(--text-faint)', fontSize:10, marginTop:1 }}>{status==='running'?DETAILS[agentKey]:role}</div>
         </div>
         <span style={{ color:col[status]??LIME, fontSize:9 }}>{status.toUpperCase()}</span>
       </div>
@@ -723,9 +726,9 @@ function AgentPill({ agentKey, name, role, status }) {
 function Metric({ label, value, sub }) {
   return (
     <div style={CARD}>
-      <div style={{ color:'#555', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:8 }}>{label}</div>
-      <div style={{ color:'#f0f0f0', fontSize:26, fontWeight:700, fontFamily:"'JetBrains Mono',monospace" }}>{value}</div>
-      {sub && <div style={{ color:'#444', fontSize:11, marginTop:4 }}>{sub}</div>}
+      <div style={{ color:'var(--text-muted)', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:8 }}>{label}</div>
+      <div style={{ color:'var(--text-primary)', fontSize:26, fontWeight:700, fontFamily:"'JetBrains Mono',monospace" }}>{value}</div>
+      {sub && <div style={{ color:'var(--text-faint)', fontSize:11, marginTop:4 }}>{sub}</div>}
     </div>
   );
 }
@@ -734,10 +737,10 @@ function SentBar({ label, count, pct, color, onClick }) {
   return (
     <button onClick={onClick} style={{ display:'block', width:'100%', background:'none', border:'none', padding:0, margin:'0 0 12px', cursor:onClick?'pointer':'default', textAlign:'left' }}>
       <div style={{ display:'flex', justifyContent:'space-between', marginBottom:5 }}>
-        <span style={{ color:'#aaa', fontSize:12 }}>{label}</span>
-        <span style={{ color:'#f0f0f0', fontSize:12, fontFamily:"'JetBrains Mono',monospace" }}>{count} · {pct}% ↗</span>
+        <span style={{ color:'var(--text-muted)', fontSize:12 }}>{label}</span>
+        <span style={{ color:'var(--text-primary)', fontSize:12, fontFamily:"'JetBrains Mono',monospace" }}>{count} · {pct}% ↗</span>
       </div>
-      <div style={{ height:5, background:'#1a1a1a', borderRadius:3 }}>
+      <div style={{ height:5, background:'var(--border-subtle)', borderRadius:3 }}>
         <div style={{ height:'100%', width:`${Math.min(pct,100)}%`, background:color, borderRadius:3 }}/>
       </div>
     </button>
@@ -748,19 +751,19 @@ function SOVRow({ brand, percentage, mentions, isClient, found, manualVerified, 
   return (
     <div style={{ marginBottom:10 }}>
       <div style={{ display:'flex', justifyContent:'space-between', marginBottom:4 }}>
-        <span style={{ color:isClient?LIME:'#aaa', fontSize:12, fontWeight:isClient?700:400 }}>
+        <span style={{ color:isClient?LIME:'var(--text-muted)', fontSize:12, fontWeight:isClient?700:400 }}>
           {isClient?'▶ ':''}{brand}
           {(manualVerified || sourceLabel) && found && (
-            <span style={{ color:'#ffda75', border:'1px solid #ffda7544', borderRadius:4, padding:'1px 5px', fontSize:9, marginLeft:6, fontFamily:"'JetBrains Mono',monospace", textTransform:'uppercase' }}>
+            <span style={{ color:'var(--accent-highlight)', border:'1px solid var(--accent-highlight-border)', borderRadius:4, padding:'1px 5px', fontSize:9, marginLeft:6, fontFamily:"'JetBrains Mono',monospace", textTransform:'uppercase' }}>
               {sourceLabel || 'Manual'}
             </span>
           )}
-          {!found && <span style={{ color:'#444', fontSize:10, marginLeft:6, fontFamily:"'JetBrains Mono',monospace" }}>no project</span>}
+          {!found && <span style={{ color:'var(--text-faint)', fontSize:10, marginLeft:6, fontFamily:"'JetBrains Mono',monospace" }}>no project</span>}
         </span>
-        <span style={{ color:'#555', fontSize:11, fontFamily:"'JetBrains Mono',monospace" }}>{found?`${percentage}% · ${mentions||0}`:'—'}</span>
+        <span style={{ color:'var(--text-muted)', fontSize:11, fontFamily:"'JetBrains Mono',monospace" }}>{found?`${percentage}% · ${mentions||0}`:'—'}</span>
       </div>
-      <div style={{ height:4, background:'#1a1a1a', borderRadius:2 }}>
-        <div style={{ height:'100%', width:`${found?Math.min(percentage,100):0}%`, background:isClient?LIME:'#2a2a2a', borderRadius:2 }}/>
+      <div style={{ height:4, background:'var(--border-subtle)', borderRadius:2 }}>
+        <div style={{ height:'100%', width:`${found?Math.min(percentage,100):0}%`, background:isClient?LIME:'var(--border-strong)', borderRadius:2 }}/>
       </div>
     </div>
   );
@@ -785,29 +788,29 @@ const DEMO_SOCIAL_LISTENING = {
     { label: 'Total social media interactions', value: '293K', change: '+734%', tone: 'up' },
   ],
   mentions: [
-    { source: 'reddit.com', title: 'EastWest Bank makes InstaPay and PESONet transfers free starting July 15', meta: '09 Jul, 2026', sentiment: 'Positive', text: 'EastWest Bank became the latest bank to offer free InstaPay and PESONet fund transfers, giving customers one more way to save on everyday banking.', icon: 'RD', color: '#ff4500' },
-    { source: 'instagram.com', title: 'eastwestbanker', meta: '724 followers · 14 Jul, 2026', sentiment: 'Positive', text: 'Dream Run 2026 content carried upbeat reactions around the CDO leg, registration pushes, and community participation.', icon: 'IG', color: '#e1306c' },
-    { source: 'musictech.com', title: 'EastWest Sounds DrumX Plugin', meta: '21 Jul, 2026', sentiment: 'Neutral', text: 'Music and creator mentions used the EastWest name in a separate entertainment/software context, contributing neutral search noise.', icon: 'MT', color: '#00d2ff' },
-    { source: 'youtube.com', title: 'EastWest Horizons', meta: '3.0M views · 5,010 followers · 28 Jun, 2026', sentiment: 'Neutral', text: 'Open a regular savings or checking account for up to Php 100,000 in rewards with EastWest Horizons. This YouTube video was the main June 28 reach driver.', icon: 'YT', color: '#ff0000' },
-    { source: 'ph.jobstreet.com', title: 'Bayani Esteban Jr, Loan Specialist at EastWest Rural Bank, Inc.', meta: '21 Jul, 2026', sentiment: 'Neutral', text: 'Hiring and professional profile pages added recurring non-social mentions around EastWest banking roles.', icon: 'JS', color: '#0b3d91' },
-    { source: 'x.com', title: 'FretlessMonster', meta: '920 views · 18K followers · 20 Jul, 2026', sentiment: 'Positive', text: 'Entertainment conversation referenced EastWest Studios and musician activity, helping explain positive but non-bank-related lift.', icon: 'X', color: '#9ca3af' },
+    { source: 'reddit.com', title: 'EastWest Bank makes InstaPay and PESONet transfers free starting July 15', meta: '09 Jul, 2026', sentiment: 'Positive', text: 'EastWest Bank became the latest bank to offer free InstaPay and PESONet fund transfers, giving customers one more way to save on everyday banking.', icon: 'RD', color: 'var(--chart-orange)' },
+    { source: 'instagram.com', title: 'eastwestbanker', meta: '724 followers · 14 Jul, 2026', sentiment: 'Positive', text: 'Dream Run 2026 content carried upbeat reactions around the CDO leg, registration pushes, and community participation.', icon: 'IG', color: 'var(--chart-pink)' },
+    { source: 'musictech.com', title: 'EastWest Sounds DrumX Plugin', meta: '21 Jul, 2026', sentiment: 'Neutral', text: 'Music and creator mentions used the EastWest name in a separate entertainment/software context, contributing neutral search noise.', icon: 'MT', color: 'var(--chart-cyan)' },
+    { source: 'youtube.com', title: 'EastWest Horizons', meta: '3.0M views · 5,010 followers · 28 Jun, 2026', sentiment: 'Neutral', text: 'Open a regular savings or checking account for up to Php 100,000 in rewards with EastWest Horizons. This YouTube video was the main June 28 reach driver.', icon: 'YT', color: 'var(--chart-red)' },
+    { source: 'ph.jobstreet.com', title: 'Bayani Esteban Jr, Loan Specialist at EastWest Rural Bank, Inc.', meta: '21 Jul, 2026', sentiment: 'Neutral', text: 'Hiring and professional profile pages added recurring non-social mentions around EastWest banking roles.', icon: 'JS', color: 'var(--chart-blue)' },
+    { source: 'x.com', title: 'FretlessMonster', meta: '920 views · 18K followers · 20 Jul, 2026', sentiment: 'Positive', text: 'Entertainment conversation referenced EastWest Studios and musician activity, helping explain positive but non-bank-related lift.', icon: 'X', color: 'var(--text-muted)' },
   ],
   sources: [
-    { name: 'Facebook', pct: 34.7, color: '#33b6b4' },
-    { name: 'News', pct: 19.5, color: '#dc37a5' },
-    { name: 'Other Socials', pct: 13.5, color: '#a66adb' },
-    { name: 'Instagram', pct: 10.3, color: '#7155d9' },
-    { name: 'TikTok', pct: 7.7, color: '#2f86de' },
-    { name: 'Blogs', pct: 5.2, color: '#f4d03f' },
-    { name: 'Videos', pct: 4.5, color: '#e74c3c' },
-    { name: 'X (Twitter)', pct: 3.5, color: '#f78fb3' },
-    { name: 'Web', pct: 0.8, color: '#7ed6df' },
-    { name: 'Podcasts', pct: 0.2, color: '#1dd1a1' },
+    { name: 'Facebook', pct: 34.7, color: 'var(--chart-teal)' },
+    { name: 'News', pct: 19.5, color: 'var(--chart-pink)' },
+    { name: 'Other Socials', pct: 13.5, color: 'var(--chart-purple)' },
+    { name: 'Instagram', pct: 10.3, color: 'var(--chart-purple)' },
+    { name: 'TikTok', pct: 7.7, color: 'var(--chart-blue)' },
+    { name: 'Blogs', pct: 5.2, color: 'var(--chart-gold)' },
+    { name: 'Videos', pct: 4.5, color: 'var(--chart-red)' },
+    { name: 'X (Twitter)', pct: 3.5, color: 'var(--chart-rose)' },
+    { name: 'Web', pct: 0.8, color: 'var(--chart-cyan)' },
+    { name: 'Podcasts', pct: 0.2, color: 'var(--chart-green)' },
   ],
   sentiment: [
-    { name: 'Neutral', pct: 76.2, color: '#dfe3e8' },
-    { name: 'Positive', pct: 18.0, color: '#10b981' },
-    { name: 'Negative', pct: 5.8, color: '#ef4444' },
+    { name: 'Neutral', pct: 76.2, color: 'var(--chart-neutral)' },
+    { name: 'Positive', pct: 18.0, color: 'var(--accent-positive)' },
+    { name: 'Negative', pct: 5.8, color: 'var(--accent-negative)' },
   ],
 };
 
@@ -866,7 +869,7 @@ function socialListeningSnapshot(brand, metrics, demoMode) {
   const socialReach = Number(metrics.socialMediaReach) || Math.round(reach * 0.76);
   const nonSocialReach = Number(metrics.nonSocialMediaReach) || Math.max(reach - socialReach, 0);
   const isManual = !!metrics.manualVerified;
-  const sourcePalette = ['#2f86de', '#dc37a5', '#e74c3c', '#f78fb3', '#33b6b4', '#7155d9', '#f4d03f', '#7ed6df'];
+  const sourcePalette = ['var(--chart-blue)', 'var(--chart-pink)', 'var(--chart-red)', 'var(--chart-rose)', 'var(--chart-teal)', 'var(--chart-purple)', 'var(--chart-gold)', 'var(--chart-cyan)'];
   const sourceCategories = metrics.sourceCategories?.length
     ? metrics.sourceCategories.map((s, i) => ({
       name: s.name || `Source ${i + 1}`,
@@ -908,32 +911,32 @@ function socialListeningSnapshot(brand, metrics, demoMode) {
     sources: sourceCategories,
     sourceNarrative: metrics.sourceNarrative || '',
     sentiment: [
-      { name: 'Neutral', pct: pct(neutral, positive + negative + neutral), color: '#dfe3e8' },
-      { name: 'Positive', pct: pct(positive, positive + negative + neutral), color: '#10b981' },
-      { name: 'Negative', pct: pct(negative, positive + negative + neutral), color: '#ef4444' },
+      { name: 'Neutral', pct: pct(neutral, positive + negative + neutral), color: 'var(--chart-neutral)' },
+      { name: 'Positive', pct: pct(positive, positive + negative + neutral), color: 'var(--accent-positive)' },
+      { name: 'Negative', pct: pct(negative, positive + negative + neutral), color: 'var(--accent-negative)' },
     ],
   };
 }
 
 function DeltaBadge({ change, tone }) {
-  const bg = tone === 'down' ? '#ffccd5' : tone === 'live' ? `${LIME}22` : '#baf7d6';
-  const color = tone === 'down' ? '#d83a52' : tone === 'live' ? LIME : '#059669';
+  const bg = tone === 'down' ? 'var(--accent-negative-soft)' : tone === 'live' ? 'var(--accent-live-soft)' : 'var(--accent-positive-soft)';
+  const color = tone === 'down' ? 'var(--accent-negative)' : tone === 'live' ? LIME : 'var(--accent-positive)';
   return <span style={{ background:bg, color, borderRadius:999, padding:'2px 7px', fontSize:9, fontWeight:700, lineHeight:1 }}>{change}</span>;
 }
 
 function MentionCard({ mention }) {
   const isPositive = mention.sentiment === 'Positive';
   return (
-    <div style={{ background:'#111', border:'1px solid #232323', borderRadius:8, padding:'12px 14px', minHeight:118 }}>
+    <div style={{ background:'var(--bg-surface)', border:'1px solid var(--border)', borderRadius:8, padding:'12px 14px', minHeight:118 }}>
       <div style={{ display:'flex', gap:12, alignItems:'flex-start' }}>
-        <div style={{ width:30, height:30, borderRadius:'50%', background:mention.color, color:'#fff', display:'grid', placeItems:'center', fontSize:10, fontWeight:800, flexShrink:0, fontFamily:"'JetBrains Mono',monospace" }}>{mention.icon}</div>
+        <div style={{ width:30, height:30, borderRadius:'50%', background:mention.color, color:'var(--text-on-accent)', display:'grid', placeItems:'center', fontSize:10, fontWeight:800, flexShrink:0, fontFamily:"'JetBrains Mono',monospace" }}>{mention.icon}</div>
         <div style={{ minWidth:0, flex:1 }}>
           <div style={{ display:'flex', justifyContent:'space-between', gap:10, marginBottom:3 }}>
-            <h4 style={{ color:'#f0f0f0', fontSize:13, lineHeight:1.25, margin:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{mention.title}</h4>
-            <span style={{ background:isPositive?'#baf7d6':'#2a2d31', color:isPositive?'#047857':'#a3aab5', borderRadius:999, padding:'3px 9px', fontSize:9, fontWeight:700, flexShrink:0 }}>{mention.sentiment}</span>
+            <h4 style={{ color:'var(--text-primary)', fontSize:13, lineHeight:1.25, margin:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{mention.title}</h4>
+            <span style={{ background:isPositive?'var(--accent-positive-soft)':'var(--bg-surface-muted)', color:isPositive?'var(--accent-positive-strong)':'var(--text-muted)', borderRadius:999, padding:'3px 9px', fontSize:9, fontWeight:700, flexShrink:0 }}>{mention.sentiment}</span>
           </div>
-          <div style={{ color:'#6b7280', fontSize:10, marginBottom:12 }}>{mention.source} · {mention.meta}</div>
-          <p style={{ color:'#b8bec8', fontSize:11, lineHeight:1.55, margin:0 }}>{mention.text}</p>
+          <div style={{ color:'var(--text-muted)', fontSize:10, marginBottom:12 }}>{mention.source} · {mention.meta}</div>
+          <p style={{ color:'var(--text-secondary)', fontSize:11, lineHeight:1.55, margin:0 }}>{mention.text}</p>
         </div>
       </div>
     </div>
@@ -942,13 +945,13 @@ function MentionCard({ mention }) {
 
 function OverviewGrid({ items }) {
   return (
-    <div style={{ background:'#101312', border:`1px solid ${LIME}22`, borderRadius:8, overflow:'hidden' }}>
+    <div style={{ background:'var(--bg-surface)', border:`1px solid var(--accent-live-soft)`, borderRadius:8, overflow:'hidden' }}>
       <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(150px, 1fr))' }}>
         {items.map((item, i) => (
-          <div key={i} style={{ padding:'14px 16px', borderRight:'1px solid #222', borderBottom:'1px solid #222', minHeight:86 }}>
-            <div style={{ color:'#7c8798', fontSize:10, marginBottom:20 }}>{item.label}</div>
+          <div key={i} style={{ padding:'14px 16px', borderRight:'1px solid var(--bg-surface-muted)', borderBottom:'1px solid var(--bg-surface-muted)', minHeight:86 }}>
+            <div style={{ color:'var(--text-muted)', fontSize:10, marginBottom:20 }}>{item.label}</div>
             <div style={{ display:'flex', gap:7, alignItems:'center' }}>
-              <span style={{ color:'#f3f4f6', fontSize:20, fontWeight:800, fontFamily:"'JetBrains Mono',monospace" }}>{item.value}</span>
+              <span style={{ color:'var(--text-primary)', fontSize:20, fontWeight:800, fontFamily:"'JetBrains Mono',monospace" }}>{item.value}</span>
               <DeltaBadge change={item.change} tone={item.tone}/>
             </div>
           </div>
@@ -968,14 +971,14 @@ function DonutChart({ data }) {
   return (
     <div style={{ display:'grid', gridTemplateColumns:'minmax(180px, 260px) 1fr', gap:24, alignItems:'center' }}>
       <div style={{ width:'min(46vw, 220px)', aspectRatio:'1', borderRadius:'50%', background:`conic-gradient(${gradient})`, position:'relative', justifySelf:'center' }}>
-        <div style={{ position:'absolute', inset:'29%', borderRadius:'50%', background:'#111' }}/>
+        <div style={{ position:'absolute', inset:'29%', borderRadius:'50%', background:'var(--bg-surface)' }}/>
       </div>
       <div style={{ display:'grid', gap:5 }}>
         {data.map(d => (
-          <div key={d.name} style={{ display:'flex', alignItems:'center', gap:8, color:'#cbd5e1', fontSize:11 }}>
+          <div key={d.name} style={{ display:'flex', alignItems:'center', gap:8, color:'var(--text-secondary)', fontSize:11 }}>
             <span style={{ width:8, height:8, borderRadius:'50%', background:d.color, flexShrink:0 }}/>
             <span style={{ minWidth:88 }}>{d.name}</span>
-            <span style={{ color:'#7c8798', fontFamily:"'JetBrains Mono',monospace" }}>{d.pct}%</span>
+            <span style={{ color:'var(--text-muted)', fontFamily:"'JetBrains Mono',monospace" }}>{d.pct}%</span>
           </div>
         ))}
       </div>
@@ -987,17 +990,17 @@ function SentimentGauge({ data }) {
   const neutral = data.find(d => d.name === 'Neutral')?.pct ?? 0;
   const positive = data.find(d => d.name === 'Positive')?.pct ?? 0;
   const negative = data.find(d => d.name === 'Negative')?.pct ?? 0;
-  const gradient = `conic-gradient(from 270deg, #dfe3e8 0 ${neutral / 2}%, #10b981 ${neutral / 2}% ${(neutral + positive) / 2}%, #ef4444 ${(neutral + positive) / 2}% 50%, transparent 50% 100%)`;
+  const gradient = `conic-gradient(from 270deg, var(--chart-neutral) 0 ${neutral / 2}%, var(--accent-positive) ${neutral / 2}% ${(neutral + positive) / 2}%, var(--accent-negative) ${(neutral + positive) / 2}% 50%, transparent 50% 100%)`;
   return (
     <div style={{ display:'grid', placeItems:'center', paddingTop:6 }}>
       <div style={{ width:'min(52vw, 270px)', aspectRatio:'2 / 1', overflow:'hidden', position:'relative' }}>
         <div style={{ width:'100%', aspectRatio:'1', borderRadius:'50%', background:gradient, position:'absolute', left:0, top:0 }}>
-          <div style={{ position:'absolute', inset:'34%', borderRadius:'50%', background:'#111' }}/>
+          <div style={{ position:'absolute', inset:'34%', borderRadius:'50%', background:'var(--bg-surface)' }}/>
         </div>
       </div>
       <div style={{ display:'flex', gap:18, flexWrap:'wrap', justifyContent:'center', marginTop:8 }}>
         {data.map(d => (
-          <div key={d.name} style={{ display:'flex', alignItems:'center', gap:7, color:'#cbd5e1', fontSize:11 }}>
+          <div key={d.name} style={{ display:'flex', alignItems:'center', gap:7, color:'var(--text-secondary)', fontSize:11 }}>
             <span style={{ width:8, height:8, borderRadius:'50%', background:d.color }}/>
             <span>{d.name}: {d.pct}%</span>
           </div>
@@ -1013,7 +1016,7 @@ function SocialListeningReport({ brand, metrics, demoMode }) {
     return (
       <div style={{ ...CARD, marginBottom:16 }}>
         <h2 style={{ fontSize:20, margin:'0 0 8px', fontWeight:800 }}>Social Listening Snapshot</h2>
-        <p style={{ color:'#777', fontSize:13, lineHeight:1.65, margin:0 }}>
+        <p style={{ color:'var(--text-muted)', fontSize:13, lineHeight:1.65, margin:0 }}>
           Live social listening data is not available for this brand yet. Add a tracking source or enable demo mode for the EastWest pitch snapshot.
         </p>
       </div>
@@ -1036,7 +1039,7 @@ function SocialListeningReport({ brand, metrics, demoMode }) {
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(280px, 1fr))', gap:8 }}>
             {social.mentions.length
               ? social.mentions.map((mention, i) => <MentionCard key={i} mention={mention}/>)
-              : <div style={{ ...CARD, minHeight:118, color:'#777', fontSize:12, lineHeight:1.65 }}>No top mentions were extracted from this uploaded export. Use the confirmation step to verify whether the tracking export included that page.</div>
+              : <div style={{ ...CARD, minHeight:118, color:'var(--text-muted)', fontSize:12, lineHeight:1.65 }}>No top mentions were extracted from this uploaded export. Use the confirmation step to verify whether the tracking export included that page.</div>
             }
           </div>
         </div>
@@ -1049,16 +1052,16 @@ function SocialListeningReport({ brand, metrics, demoMode }) {
       <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(320px, 1fr))', gap:12 }}>
         <div style={{ ...CARD, minHeight:270 }}>
           <h2 style={{ fontSize:20, margin:'0 0 12px', fontWeight:800 }}>Sources Share</h2>
-          <div style={{ color:'#f0f0f0', fontSize:15, fontWeight:800, marginBottom:6 }}>{topSource ? `${topSource.name} leads source share` : 'Source mix unavailable'}</div>
-          <p style={{ color:'#9ca3af', fontSize:12, margin:'0 0 18px' }}>{sourceNarrative}</p>
-          {social.sources?.length ? <DonutChart data={social.sources}/> : <p style={{ color:'#777', fontSize:12, lineHeight:1.65 }}>No source category breakdown was extracted from this export.</p>}
+          <div style={{ color:'var(--text-primary)', fontSize:15, fontWeight:800, marginBottom:6 }}>{topSource ? `${topSource.name} leads source share` : 'Source mix unavailable'}</div>
+          <p style={{ color:'var(--text-muted)', fontSize:12, margin:'0 0 18px' }}>{sourceNarrative}</p>
+          {social.sources?.length ? <DonutChart data={social.sources}/> : <p style={{ color:'var(--text-muted)', fontSize:12, lineHeight:1.65 }}>No source category breakdown was extracted from this export.</p>}
         </div>
         <div style={{ ...CARD, minHeight:270 }}>
           <h2 style={{ fontSize:20, margin:'0 0 12px', fontWeight:800 }}>Sentiment Share</h2>
-          <div style={{ color:'#f0f0f0', fontSize:15, fontWeight:800, marginBottom:6 }}>
+          <div style={{ color:'var(--text-primary)', fontSize:15, fontWeight:800, marginBottom:6 }}>
             {pos > neg * 2 ? 'Overwhelmingly positive' : neg > pos ? 'Negative pressure building' : 'Mostly neutral conversation'}
           </div>
-          <p style={{ color:'#9ca3af', fontSize:12, margin:'0 0 8px' }}>
+          <p style={{ color:'var(--text-muted)', fontSize:12, margin:'0 0 8px' }}>
             There are {neg ? (pos / neg).toFixed(1) : 'many'} times more positive than negative mentions ({pos}% vs. {neg}%). The most common sentiment is neutral ({neu}%).
           </p>
           <SentimentGauge data={social.sentiment}/>
@@ -1072,14 +1075,14 @@ function Drawer({ open, title, eyebrow, onClose, children }) {
   if (!open) return null;
   return (
     <div style={{ position:'fixed', inset:0, zIndex:50, pointerEvents:'auto' }}>
-      <button aria-label="Close drawer" onClick={onClose} style={{ position:'absolute', inset:0, background:'#0008', border:'none', cursor:'pointer' }}/>
-      <aside style={{ position:'absolute', top:0, right:0, width:'min(100vw, 430px)', height:'100%', background:'#0b0b0b', borderLeft:'1px solid #242424', boxShadow:'-16px 0 40px #0008', padding:20, overflowY:'auto' }}>
+      <button aria-label="Close drawer" onClick={onClose} style={{ position:'absolute', inset:0, background:'var(--bg-overlay)', border:'none', cursor:'pointer' }}/>
+      <aside style={{ position:'absolute', top:0, right:0, width:'min(100vw, 430px)', height:'100%', background:'var(--bg-surface-subtle)', borderLeft:'1px solid var(--border)', boxShadow:'-16px 0 40px var(--bg-overlay)', padding:20, overflowY:'auto' }}>
         <div style={{ display:'flex', justifyContent:'space-between', gap:12, alignItems:'flex-start', marginBottom:18 }}>
           <div>
             {eyebrow && <div style={{ color:LIME, fontSize:10, letterSpacing:'0.15em', textTransform:'uppercase', fontFamily:"'JetBrains Mono',monospace", marginBottom:5 }}>{eyebrow}</div>}
-            <h2 style={{ color:'#f0f0f0', fontSize:22, margin:0 }}>{title}</h2>
+            <h2 style={{ color:'var(--text-primary)', fontSize:22, margin:0 }}>{title}</h2>
           </div>
-          <button onClick={onClose} style={{ width:32, height:32, borderRadius:6, border:'1px solid #252525', background:'#111', color:'#777', cursor:'pointer', fontSize:18 }}>×</button>
+          <button onClick={onClose} style={{ width:32, height:32, borderRadius:6, border:'1px solid var(--border-strong)', background:'var(--bg-surface)', color:'var(--text-muted)', cursor:'pointer', fontSize:18 }}>×</button>
         </div>
         {children}
       </aside>
@@ -1089,7 +1092,7 @@ function Drawer({ open, title, eyebrow, onClose, children }) {
 
 function TextBlock({ text }) {
   return (
-    <div style={{ color:'#c9c9c9', fontSize:13, lineHeight:1.7, whiteSpace:'pre-wrap' }}>
+    <div style={{ color:'var(--text-secondary)', fontSize:13, lineHeight:1.7, whiteSpace:'pre-wrap' }}>
       {text || 'No response yet.'}
     </div>
   );
@@ -1098,7 +1101,7 @@ function TextBlock({ text }) {
 function ErrorMessage({ message }) {
   if (!message) return null;
   return (
-    <div style={{ background:'#1a0000', border:'1px solid #ff444433', borderRadius:6, color:'#ff8a8a', fontSize:12, lineHeight:1.55, padding:'10px 12px', marginTop:12 }}>
+    <div style={{ background:'var(--bg-panel-negative)', border:'1px solid var(--accent-negative-border)', borderRadius:6, color:'var(--accent-negative)', fontSize:12, lineHeight:1.55, padding:'10px 12px', marginTop:12 }}>
       {message}
     </div>
   );
@@ -1145,21 +1148,21 @@ function clientSafeText(text = '') {
 
 function IntelligenceQuery({ query, setQuery, loading, result, error, open, setOpen, onSubmit }) {
   return (
-    <div style={{ ...CARD, marginBottom:14, borderColor:'#1DA1F244' }}>
+    <div style={{ ...CARD, marginBottom:14, borderColor:'var(--accent-info-border)' }}>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:12, marginBottom:12 }}>
         <div>
-          <div style={{ color:'#1DA1F2', fontSize:10, letterSpacing:'0.16em', textTransform:'uppercase', fontFamily:"'JetBrains Mono',monospace", marginBottom:4 }}>Intelligence Query — Grok Live Search</div>
-          <div style={{ color:'#aaa', fontSize:12 }}>Ask about a topic, complaint, campaign, or audience question.</div>
+          <div style={{ color:'var(--accent-info)', fontSize:10, letterSpacing:'0.16em', textTransform:'uppercase', fontFamily:"'JetBrains Mono',monospace", marginBottom:4 }}>Intelligence Query — Grok Live Search</div>
+          <div style={{ color:'var(--text-muted)', fontSize:12 }}>Ask about a topic, complaint, campaign, or audience question.</div>
         </div>
-        {result && <button onClick={() => setOpen(!open)} style={{ background:'#111', border:'1px solid #252525', borderRadius:6, color:'#777', padding:'8px 10px', cursor:'pointer', fontSize:11 }}>{open?'Collapse':'Expand'}</button>}
+        {result && <button onClick={() => setOpen(!open)} style={{ background:'var(--bg-surface)', border:'1px solid var(--border-strong)', borderRadius:6, color:'var(--text-muted)', padding:'8px 10px', cursor:'pointer', fontSize:11 }}>{open?'Collapse':'Expand'}</button>}
       </div>
       <form onSubmit={onSubmit} style={{ display:'flex', gap:8 }}>
-        <input value={query} onChange={e => setQuery(e.target.value)} placeholder="What are people saying about card delivery?" style={{ flex:1, minWidth:0, background:'#0b0b0b', border:'1px solid #252525', borderRadius:6, color:'#f0f0f0', padding:'11px 12px', fontSize:13 }}/>
-        <button disabled={loading || !query.trim()} style={{ background:loading?'#222':'#1DA1F2', color:'#fff', border:'none', borderRadius:6, padding:'0 15px', cursor:loading?'default':'pointer', fontSize:12, fontWeight:700 }}>{loading?'Searching...':'Search'}</button>
+        <input value={query} onChange={e => setQuery(e.target.value)} placeholder="What are people saying about card delivery?" style={{ flex:1, minWidth:0, background:'var(--bg-surface-subtle)', border:'1px solid var(--border-strong)', borderRadius:6, color:'var(--text-primary)', padding:'11px 12px', fontSize:13 }}/>
+        <button disabled={loading || !query.trim()} style={{ background:loading?'var(--bg-surface-muted)':'var(--accent-info)', color:'var(--text-on-accent)', border:'none', borderRadius:6, padding:'0 15px', cursor:loading?'default':'pointer', fontSize:12, fontWeight:700 }}>{loading?'Searching...':'Search'}</button>
       </form>
       <ErrorMessage message={error}/>
       {result && open && (
-        <div style={{ marginTop:14, paddingTop:14, borderTop:'1px solid #202020' }}>
+        <div style={{ marginTop:14, paddingTop:14, borderTop:'1px solid var(--border)' }}>
           <TextBlock text={result}/>
         </div>
       )}
@@ -1169,7 +1172,7 @@ function IntelligenceQuery({ query, setQuery, loading, result, error, open, setO
 
 function FloatingAskAI({ onClick }) {
   return (
-    <button type="button" data-testid="ask-ai-floating" onClick={onClick} style={{ position:'fixed', right:24, bottom:88, zIndex:1000, background:LIME, color:'#000', border:'1px solid #000', borderRadius:999, padding:'14px 18px', fontWeight:800, fontSize:13, boxShadow:`0 10px 30px ${LIME}33`, cursor:'pointer' }}>
+    <button type="button" data-testid="ask-ai-floating" onClick={onClick} style={{ position:'fixed', right:24, bottom:88, zIndex:1000, background:LIME, color:'var(--text-inverse)', border:'1px solid var(--text-inverse)', borderRadius:999, padding:'14px 18px', fontWeight:800, fontSize:13, boxShadow:`0 10px 30px var(--shadow-accent)`, cursor:'pointer' }}>
       Ask AI
     </button>
   );
@@ -1183,9 +1186,9 @@ function SourceBadge({ label, active, note }) {
       gap:4,
       borderRadius:999,
       padding:'3px 8px',
-      border:`1px solid ${active ? `${LIME}44` : '#333'}`,
-      background:active ? `${LIME}18` : '#151515',
-      color:active ? LIME : '#666',
+      border:`1px solid ${active ? 'var(--accent-live-border)' : 'var(--text-faint)'}`,
+      background:active ? 'var(--accent-live-softer)' : 'var(--bg-surface-muted)',
+      color:active ? LIME : 'var(--text-muted)',
       fontSize:9,
       fontFamily:"'JetBrains Mono',monospace",
       letterSpacing:'0.08em',
@@ -1234,7 +1237,7 @@ function SourceAttribution({ hasB24, hasGrok, competitiveLite, manualVerified, u
       <SourceBadge label="Google AI" active={statuses.gemini.active} note={statuses.gemini.note} />
       <SourceBadge label="Perplexity" active={statuses.perplexity.active} note={statuses.perplexity.note} />
       <SourceBadge label="Meta AI" active={statuses.meta.active} note={statuses.meta.note} />
-      <span style={{ color:'#555', fontSize:9, fontFamily:"'JetBrains Mono',monospace" }}>*wired / pending / manual</span>
+      <span style={{ color:'var(--text-muted)', fontSize:9, fontFamily:"'JetBrains Mono',monospace" }}>*wired / pending / manual</span>
     </div>
   );
 }
@@ -1245,27 +1248,27 @@ function DirectionalIntelLite({ competitiveLite }) {
     .filter(item => item.synthesis && item.synthesis !== 'No comparative data available for this period.');
   if (!items.length && !competitiveLite?.error) return null;
   return (
-    <div style={{ ...CARD, marginBottom:14, borderColor:'#1DA1F244' }}>
+    <div style={{ ...CARD, marginBottom:14, borderColor:'var(--accent-info-border)' }}>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12, marginBottom:12 }}>
         <div>
-          <div style={{ color:'#1DA1F2', fontSize:10, letterSpacing:'0.14em', textTransform:'uppercase', fontFamily:"'JetBrains Mono',monospace", marginBottom:4 }}>Directional Intelligence · AI-native sources</div>
-          <p style={{ color:'#777', fontSize:12, lineHeight:1.55, margin:0 }}>Grok, Perplexity, Gemini, and optional manual Meta AI notes. Not audited live monitoring mention data.</p>
+          <div style={{ color:'var(--accent-info)', fontSize:10, letterSpacing:'0.14em', textTransform:'uppercase', fontFamily:"'JetBrains Mono',monospace", marginBottom:4 }}>Directional Intelligence · AI-native sources</div>
+          <p style={{ color:'var(--text-muted)', fontSize:12, lineHeight:1.55, margin:0 }}>Grok, Perplexity, Gemini, and optional manual Meta AI notes. Not audited live monitoring mention data.</p>
         </div>
-        <span style={{ background:'#1DA1F222', border:'1px solid #1DA1F244', borderRadius:10, padding:'3px 9px', fontSize:9, color:'#1DA1F2', whiteSpace:'nowrap', fontFamily:"'JetBrains Mono',monospace" }}>AI-NATIVE</span>
+        <span style={{ background:'var(--accent-info-soft)', border:'1px solid var(--accent-info-border)', borderRadius:10, padding:'3px 9px', fontSize:9, color:'var(--accent-info)', whiteSpace:'nowrap', fontFamily:"'JetBrains Mono',monospace" }}>AI-NATIVE</span>
       </div>
       <ErrorMessage message={competitiveLite?.error ? 'No comparative data available for this period.' : ''}/>
       {items.length > 0 && (
         <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(260px, 1fr))', gap:10 }}>
           {items.map((item, i) => (
-            <div key={i} style={{ background:'#0d0d0d', border:'1px solid #1a1a1a', borderRadius:8, padding:'12px 14px' }}>
+            <div key={i} style={{ background:'var(--bg-surface-muted)', border:'1px solid var(--border-subtle)', borderRadius:8, padding:'12px 14px' }}>
               <div style={{ display:'flex', justifyContent:'space-between', gap:8, alignItems:'center', marginBottom:8 }}>
-                <div style={{ color:'#f0f0f0', fontSize:13, fontWeight:800 }}>{item.competitor}</div>
-                <span style={{ color:'#1DA1F2', fontSize:9, fontFamily:"'JetBrains Mono',monospace" }}>DIRECTIONAL</span>
+                <div style={{ color:'var(--text-primary)', fontSize:13, fontWeight:800 }}>{item.competitor}</div>
+                <span style={{ color:'var(--accent-info)', fontSize:9, fontFamily:"'JetBrains Mono',monospace" }}>DIRECTIONAL</span>
               </div>
-              <p style={{ color:'#b8bec8', fontSize:12, lineHeight:1.65, margin:'0 0 10px', whiteSpace:'pre-wrap' }}>{item.synthesis}</p>
+              <p style={{ color:'var(--text-secondary)', fontSize:12, lineHeight:1.65, margin:'0 0 10px', whiteSpace:'pre-wrap' }}>{item.synthesis}</p>
               <div style={{ display:'flex', flexWrap:'wrap', gap:5 }}>
                 {item.sources?.filter(source => !hasInternalOpsText(source.themes)).map(source => (
-                  <span key={source.source} title={source.themes} style={{ background:'#111', border:'1px solid #252525', borderRadius:999, color:'#777', padding:'3px 8px', fontSize:9 }}>
+                  <span key={source.source} title={source.themes} style={{ background:'var(--bg-surface)', border:'1px solid var(--border-strong)', borderRadius:999, color:'var(--text-muted)', padding:'3px 8px', fontSize:9 }}>
                     {source.source.split(' ')[0]}
                   </span>
                 ))}
@@ -1646,105 +1649,108 @@ Return a concise intelligence summary, recurring themes, specific public posts o
         <div style={{ marginBottom:32 }}>
           <div style={{ color:LIME, fontFamily:"'JetBrains Mono',monospace", fontSize:10, letterSpacing:'0.2em', marginBottom:8 }}>PRAXIS EXPERIENTIAL · SOCIAL INTELLIGENCE</div>
           <h1 style={{ fontFamily:"'Barlow Condensed',sans-serif", fontSize:44, fontWeight:700, margin:'0 0 4px' }}>SIGNAL INTEL <span style={{ color:LIME }}>v3</span></h1>
-          <p style={{ color:'#444', fontSize:12, margin:'0 0 12px' }}>Signal Intel live monitoring · Grok search · Claude synthesis · Vercel</p>
-          <div style={{ background:'#0d1100', border:`1px solid ${LIME}20`, borderRadius:6, padding:'8px 14px', display:'flex', flexWrap:'wrap', gap:4, alignItems:'center' }}>
+          <p style={{ color:'var(--text-faint)', fontSize:12, margin:'0 0 12px' }}>Signal Intel live monitoring · Grok search · Claude synthesis · Vercel</p>
+          <div style={{ background:'var(--bg-panel-live)', border:`1px solid var(--accent-live-soft)`, borderRadius:6, padding:'8px 14px', display:'flex', flexWrap:'wrap', gap:4, alignItems:'center' }}>
             <span style={{ color:LIME, fontSize:10, fontFamily:"'JetBrains Mono',monospace", marginRight:4 }}>PIPELINE:</span>
             {['1·Listener','2·Tracker','3·Scout+Grok','4·Analyst','5·Competitive','6·Report'].map((s,i) => (
-              <span key={i} style={{ fontSize:10 }}>{i>0&&<span style={{ color:'#333', margin:'0 3px' }}>→</span>}<span style={{ color:s.includes('Scout')?LIME:s.includes('Analyst')?'#88cc88':'#666' }}>{s}</span></span>
+              <span key={i} style={{ fontSize:10 }}>{i>0&&<span style={{ color:'var(--text-faint)', margin:'0 3px' }}>→</span>}<span style={{ color:s.includes('Scout')?LIME:s.includes('Analyst')?'var(--accent-live-strong)':'var(--text-muted)' }}>{s}</span></span>
             ))}
           </div>
         </div>
 
         <div style={{ display:'flex', flexDirection:'column', gap:16 }}>
           <div>
-            <label style={{ display:'block', color:'#666', fontSize:10, letterSpacing:'0.15em', textTransform:'uppercase', marginBottom:8 }}>Client / Brand</label>
-            <input value={brand} onChange={e => setBrand(e.target.value)} placeholder="e.g. Netflix Philippines" style={{ width:'100%', background:'#111', border:'1px solid #222', borderRadius:6, padding:'12px 14px', color:'#f0f0f0', fontSize:15 }}/>
+            <label style={{ display:'block', color:'var(--text-muted)', fontSize:10, letterSpacing:'0.15em', textTransform:'uppercase', marginBottom:8 }}>Client / Brand</label>
+            <input value={brand} onChange={e => setBrand(e.target.value)} placeholder="e.g. Netflix Philippines" style={{ width:'100%', background:'var(--bg-surface)', border:'1px solid var(--bg-surface-muted)', borderRadius:6, padding:'12px 14px', color:'var(--text-primary)', fontSize:15 }}/>
           </div>
           <div>
-            <label style={{ display:'block', color:'#666', fontSize:10, letterSpacing:'0.15em', textTransform:'uppercase', marginBottom:8 }}>Reporting Period</label>
-            <input value={period} onChange={e => setPeriod(e.target.value)} placeholder="e.g. July 3-August 2, 2026" style={{ width:'100%', background:'#111', border:'1px solid #222', borderRadius:6, padding:'12px 14px', color:'#f0f0f0', fontSize:15 }}/>
+            <label style={{ display:'block', color:'var(--text-muted)', fontSize:10, letterSpacing:'0.15em', textTransform:'uppercase', marginBottom:8 }}>Reporting Period</label>
+            <input value={period} onChange={e => setPeriod(e.target.value)} placeholder="e.g. July 3-August 2, 2026" style={{ width:'100%', background:'var(--bg-surface)', border:'1px solid var(--bg-surface-muted)', borderRadius:6, padding:'12px 14px', color:'var(--text-primary)', fontSize:15 }}/>
           </div>
           <div>
-            <label style={{ display:'block', color:'#666', fontSize:10, letterSpacing:'0.15em', textTransform:'uppercase', marginBottom:8 }}>Competitors <span style={{ color:'#333' }}>({competitors.length}/7)</span></label>
+            <label style={{ display:'block', color:'var(--text-muted)', fontSize:10, letterSpacing:'0.15em', textTransform:'uppercase', marginBottom:8 }}>Competitors <span style={{ color:'var(--text-faint)' }}>({competitors.length}/7)</span></label>
             <div style={{ display:'flex', flexWrap:'wrap', gap:8, marginBottom:10 }}>
               {competitors.map((c,i) => (
-                <span key={i} style={{ background:'#161616', border:'1px solid #2a2a2a', borderRadius:20, padding:'5px 12px 5px 14px', fontSize:12, display:'flex', alignItems:'center', gap:8 }}>
+                <span key={i} style={{ background:'var(--bg-surface-muted)', border:'1px solid var(--border-strong)', borderRadius:20, padding:'5px 12px 5px 14px', fontSize:12, display:'flex', alignItems:'center', gap:8 }}>
                   {c}
-                  <button onClick={() => setComp(p => p.filter((_,j) => j!==i))} style={{ background:'none', border:'none', color:'#444', cursor:'pointer', padding:0, fontSize:16, lineHeight:1 }}>×</button>
+                  <button onClick={() => setComp(p => p.filter((_,j) => j!==i))} style={{ background:'none', border:'none', color:'var(--text-faint)', cursor:'pointer', padding:0, fontSize:16, lineHeight:1 }}>×</button>
                 </span>
               ))}
             </div>
             {competitors.length < 7 && (
               <div style={{ display:'flex', gap:8 }}>
-                <input value={newC} onChange={e => setNewC(e.target.value)} onKeyDown={e => e.key==='Enter'&&addC()} placeholder="Add competitor..." style={{ flex:1, background:'#111', border:'1px solid #222', borderRadius:6, padding:'10px 14px', color:'#f0f0f0', fontSize:13 }}/>
-                <button onClick={addC} style={{ background:'#161616', border:'1px solid #2a2a2a', borderRadius:6, padding:'10px 16px', color:'#777', cursor:'pointer', fontSize:13 }}>+ Add</button>
+                <input value={newC} onChange={e => setNewC(e.target.value)} onKeyDown={e => e.key==='Enter'&&addC()} placeholder="Add competitor..." style={{ flex:1, background:'var(--bg-surface)', border:'1px solid var(--bg-surface-muted)', borderRadius:6, padding:'10px 14px', color:'var(--text-primary)', fontSize:13 }}/>
+                <button onClick={addC} style={{ background:'var(--bg-surface-muted)', border:'1px solid var(--border-strong)', borderRadius:6, padding:'10px 16px', color:'var(--text-muted)', cursor:'pointer', fontSize:13 }}>+ Add</button>
               </div>
             )}
           </div>
 
-          <div style={{ background:'#0a0c0a', border:`1px solid ${LIME}22`, borderRadius:8, padding:16 }}>
+          <div style={{ background:'var(--bg-panel-live)', border:`1px solid var(--accent-live-soft)`, borderRadius:8, padding:16 }}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:10 }}>
               <div>
                 <div style={{ color:LIME, fontSize:10, letterSpacing:'0.15em', textTransform:'uppercase', fontFamily:"'JetBrains Mono',monospace", marginBottom:4 }}>Tracking Sources Required</div>
-                <p style={{ color:'#555', fontSize:12, lineHeight:1.6 }}>Each brand needs a tracking source set up first.<br/>Pipeline auto-detects which sources exist.</p>
+                <p style={{ color:'var(--text-muted)', fontSize:12, lineHeight:1.6 }}>Each brand needs a tracking source set up first.<br/>Pipeline auto-detects which sources exist.</p>
               </div>
-              <a href="/setup" style={{ background:'#161616', border:`1px solid ${LIME}44`, borderRadius:6, padding:'7px 12px', color:LIME, fontSize:11, textDecoration:'none', whiteSpace:'nowrap' }}>Create Source →</a>
+          <div style={{ display:'flex', gap:8, flexWrap:'wrap', justifyContent:'flex-end' }}>
+            <ThemeToggle />
+            <a href="/setup" style={{ background:'var(--bg-surface-muted)', border:`1px solid var(--accent-live-border)`, borderRadius:6, padding:'7px 12px', color:LIME, fontSize:11, textDecoration:'none', whiteSpace:'nowrap' }}>Create Source →</a>
+          </div>
             </div>
             <div style={{ display:'flex', flexDirection:'column', gap:5 }}>
               {[brand, ...competitors].filter(Boolean).map((b,i) => (
-                <div key={i} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', background:'#111', borderRadius:5, padding:'7px 10px' }}>
+                <div key={i} style={{ display:'flex', alignItems:'center', justifyContent:'space-between', background:'var(--bg-surface)', borderRadius:5, padding:'7px 10px' }}>
                   <div style={{ display:'flex', alignItems:'center', gap:7 }}>
-                    <div style={{ width:5, height:5, borderRadius:'50%', background:i===0?LIME:'#333' }}/>
-                    <span style={{ color:i===0?'#f0f0f0':'#777', fontSize:12 }}>{b}</span>
-                    {i===0 && <span style={{ background:`${LIME}22`, color:LIME, fontSize:9, padding:'1px 5px', borderRadius:3 }}>CLIENT</span>}
+                    <div style={{ width:5, height:5, borderRadius:'50%', background:i===0?LIME:'var(--text-faint)' }}/>
+                    <span style={{ color:i===0?'var(--text-primary)':'var(--text-muted)', fontSize:12 }}>{b}</span>
+                    {i===0 && <span style={{ background:'var(--accent-live-soft)', color:LIME, fontSize:9, padding:'1px 5px', borderRadius:3 }}>CLIENT</span>}
                   </div>
-                  <span style={{ color:'#2a2a2a', fontSize:10, fontFamily:"'JetBrains Mono',monospace" }}>checked during run</span>
+                  <span style={{ color:'var(--border-strong)', fontSize:10, fontFamily:"'JetBrains Mono',monospace" }}>checked during run</span>
                 </div>
               ))}
               {![brand, ...competitors].filter(Boolean).length && (
-                <div style={{ background:'#111', borderRadius:5, padding:'9px 10px', color:'#555', fontSize:12 }}>
+                <div style={{ background:'var(--bg-surface)', borderRadius:5, padding:'9px 10px', color:'var(--text-muted)', fontSize:12 }}>
                   Add a brand or upload a monitoring export to begin.
                 </div>
               )}
             </div>
           </div>
 
-          <div style={{ background:'#10110c', border:'1px solid #ffda7544', borderRadius:8, padding:16 }}>
+          <div style={{ background:'var(--bg-panel-warning)', border:'1px solid var(--accent-highlight-border)', borderRadius:8, padding:16 }}>
             <div style={{ display:'flex', justifyContent:'space-between', gap:12, alignItems:'flex-start', marginBottom:12 }}>
               <div>
-                <div style={{ color:'#ffda75', fontSize:10, letterSpacing:'0.15em', textTransform:'uppercase', fontFamily:"'JetBrains Mono',monospace", marginBottom:4 }}>Manual data fallback</div>
-                <p style={{ color:'#777', fontSize:12, lineHeight:1.6, margin:0 }}>Upload available data here when live market filters are not usable. The pipeline will not run until you confirm the numbers below.</p>
+                <div style={{ color:'var(--accent-highlight)', fontSize:10, letterSpacing:'0.15em', textTransform:'uppercase', fontFamily:"'JetBrains Mono',monospace", marginBottom:4 }}>Manual data fallback</div>
+                <p style={{ color:'var(--text-muted)', fontSize:12, lineHeight:1.6, margin:0 }}>Upload available data here when live market filters are not usable. The pipeline will not run until you confirm the numbers below.</p>
               </div>
               <div style={{ display:'flex', gap:8, flexWrap:'wrap', justifyContent:'flex-end' }}>
-                <label style={{ background:'#ffda75', border:'1px solid #ffda75', borderRadius:6, padding:'8px 12px', color:'#111', cursor:uploadLoading?'default':'pointer', fontSize:11, fontWeight:800, whiteSpace:'nowrap' }}>
+                <label style={{ background:'var(--accent-highlight)', border:'1px solid var(--accent-highlight)', borderRadius:6, padding:'8px 12px', color:'var(--bg-surface)', cursor:uploadLoading?'default':'pointer', fontSize:11, fontWeight:800, whiteSpace:'nowrap' }}>
                   {uploadLoading ? 'Reading PDF...' : 'Upload PDF'}
                   <input type="file" accept="application/pdf" onChange={uploadBrand24Pdf} disabled={uploadLoading} style={{ display:'none' }}/>
                 </label>
-                <button type="button" onClick={startManualEntry} style={{ background:'#151515', border:'1px solid #333', borderRadius:6, padding:'8px 12px', color:'#aaa', cursor:'pointer', fontSize:11, whiteSpace:'nowrap' }}>Enter Manually</button>
+                <button type="button" onClick={startManualEntry} style={{ background:'var(--bg-surface-muted)', border:'1px solid var(--text-faint)', borderRadius:6, padding:'8px 12px', color:'var(--text-muted)', cursor:'pointer', fontSize:11, whiteSpace:'nowrap' }}>Enter Manually</button>
               </div>
             </div>
 
-            {uploadStatus && <div style={{ color:'#8fb8ff', fontSize:12, lineHeight:1.55, background:'#06111f', border:'1px solid #1DA1F244', borderRadius:6, padding:'9px 11px', marginBottom:12 }}>{uploadStatus}</div>}
-            {uploadError && <div style={{ color:'#ffb0b0', fontSize:12, lineHeight:1.55, background:'#1a0000', border:'1px solid #ff444433', borderRadius:6, padding:'9px 11px', marginBottom:12 }}>{uploadError}</div>}
+            {uploadStatus && <div style={{ color:'var(--accent-info)', fontSize:12, lineHeight:1.55, background:'var(--accent-info-soft)', border:'1px solid var(--accent-info-border)', borderRadius:6, padding:'9px 11px', marginBottom:12 }}>{uploadStatus}</div>}
+            {uploadError && <div style={{ color:'var(--accent-negative)', fontSize:12, lineHeight:1.55, background:'var(--bg-panel-negative)', border:'1px solid var(--accent-negative-border)', borderRadius:6, padding:'9px 11px', marginBottom:12 }}>{uploadError}</div>}
 
             {manualData && (
-              <div style={{ background:'#0b0b0b', border:'1px solid #25200f', borderRadius:8, padding:14 }}>
+              <div style={{ background:'var(--bg-surface-subtle)', border:'1px solid var(--accent-highlight-border)', borderRadius:8, padding:14 }}>
                 <div style={{ display:'flex', justifyContent:'space-between', gap:10, alignItems:'flex-start', marginBottom:12 }}>
                   <div>
-                    <div style={{ color:'#f0f0f0', fontSize:14, fontWeight:800, marginBottom:3 }}>
+                    <div style={{ color:'var(--text-primary)', fontSize:14, fontWeight:800, marginBottom:3 }}>
                       {manualData.source === 'pdf' ? 'Here’s what we read from your PDF' : manualData.source === 'pdf-failed' ? 'PDF extraction failed — enter the numbers manually' : 'Manual tracking entry'}
                     </div>
-                    <div style={{ color:'#777', fontSize:11 }}>{manualData.fileName} · Confidence: {manualData.confidence || 'manual'}</div>
+                    <div style={{ color:'var(--text-muted)', fontSize:11 }}>{manualData.fileName} · Confidence: {manualData.confidence || 'manual'}</div>
                   </div>
-                  <span style={{ color:'#ffda75', border:'1px solid #ffda7544', borderRadius:999, padding:'3px 8px', fontSize:9, fontFamily:"'JetBrains Mono',monospace", textTransform:'uppercase', whiteSpace:'nowrap' }}>Confirm Required</span>
+                  <span style={{ color:'var(--accent-highlight)', border:'1px solid var(--accent-highlight-border)', borderRadius:999, padding:'3px 8px', fontSize:9, fontFamily:"'JetBrains Mono',monospace", textTransform:'uppercase', whiteSpace:'nowrap' }}>Confirm Required</span>
                 </div>
                 {manualData.diagnostics?.length > 0 && (
-                  <div style={{ background:'#101010', border:'1px solid #252525', borderRadius:6, padding:'8px 10px', color:'#888', fontSize:10, lineHeight:1.55, fontFamily:"'JetBrains Mono',monospace", marginBottom:12 }}>
+                  <div style={{ background:'var(--bg-surface)', border:'1px solid var(--border-strong)', borderRadius:6, padding:'8px 10px', color:'var(--text-muted)', fontSize:10, lineHeight:1.55, fontFamily:"'JetBrains Mono',monospace", marginBottom:12 }}>
                     {manualData.diagnostics.map((d, i) => <div key={i}>// {d}</div>)}
                   </div>
                 )}
                 {manualData.warnings?.length > 0 && (
-                  <div style={{ color:'#c9a94b', fontSize:11, lineHeight:1.55, marginBottom:12 }}>
+                  <div style={{ color:'var(--accent-highlight)', fontSize:11, lineHeight:1.55, marginBottom:12 }}>
                     {manualData.warnings.map((w, i) => <div key={i}>• {w}</div>)}
                   </div>
                 )}
@@ -1763,31 +1769,31 @@ Return a concise intelligence summary, recurring themes, specific public posts o
                     ['AVE', 'ave', 'text'],
                   ].map(([label, key, type]) => (
                     <label key={key} style={{ display:'block' }}>
-                      <span style={{ display:'block', color:'#666', fontSize:9, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:5 }}>{label}</span>
-                      <input type={type} value={manualData[key] ?? ''} onChange={e => setManualField(key, e.target.value)} style={{ width:'100%', background:'#111', border:'1px solid #2a2a2a', borderRadius:6, padding:'9px 10px', color:'#f0f0f0', fontSize:12 }}/>
+                      <span style={{ display:'block', color:'var(--text-muted)', fontSize:9, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:5 }}>{label}</span>
+                      <input type={type} value={manualData[key] ?? ''} onChange={e => setManualField(key, e.target.value)} style={{ width:'100%', background:'var(--bg-surface)', border:'1px solid var(--border-strong)', borderRadius:6, padding:'9px 10px', color:'var(--text-primary)', fontSize:12 }}/>
                     </label>
                   ))}
                 </div>
-                <div style={{ display:'flex', justifyContent:'space-between', gap:12, alignItems:'center', marginTop:14, paddingTop:12, borderTop:'1px solid #222' }}>
-                  <p style={{ color:'#777', fontSize:11, lineHeight:1.5, margin:0 }}>Confirm only after checking these against the tracking dashboard or export. These headline metrics become the verified report numbers.</p>
-                  <button type="button" onClick={confirmManualAndRun} style={{ background:'#ffda75', color:'#111', border:'none', borderRadius:6, padding:'11px 15px', fontSize:12, fontWeight:900, cursor:'pointer', whiteSpace:'nowrap' }}>Confirm & Run →</button>
+                <div style={{ display:'flex', justifyContent:'space-between', gap:12, alignItems:'center', marginTop:14, paddingTop:12, borderTop:'1px solid var(--bg-surface-muted)' }}>
+                  <p style={{ color:'var(--text-muted)', fontSize:11, lineHeight:1.5, margin:0 }}>Confirm only after checking these against the tracking dashboard or export. These headline metrics become the verified report numbers.</p>
+                  <button type="button" onClick={confirmManualAndRun} style={{ background:'var(--accent-highlight)', color:'var(--bg-surface)', border:'none', borderRadius:6, padding:'11px 15px', fontSize:12, fontWeight:900, cursor:'pointer', whiteSpace:'nowrap' }}>Confirm & Run →</button>
                 </div>
               </div>
             )}
           </div>
 
-          <div style={{ background:'#0a0a0a', border:'1px solid #1a1a1a', borderRadius:8, padding:14 }}>
-            <div style={{ color:'#555', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:6, fontFamily:"'JetBrains Mono',monospace" }}>Environment</div>
-            <p style={{ color:'#2e2e2e', fontSize:11, fontFamily:"'JetBrains Mono',monospace", lineHeight:1.7 }}>
+          <div style={{ background:'var(--bg-surface-muted)', border:'1px solid var(--border-subtle)', borderRadius:8, padding:14 }}>
+            <div style={{ color:'var(--text-muted)', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:6, fontFamily:"'JetBrains Mono',monospace" }}>Environment</div>
+            <p style={{ color:'var(--text-faint)', fontSize:11, fontFamily:"'JetBrains Mono',monospace", lineHeight:1.7 }}>
               // ANTHROPIC_API_KEY → Claude synthesis auth<br/>
               // XAI_API_KEY → Grok x_search + web_search<br/>
               // Set in Vercel Dashboard → Environment Variables
             </p>
           </div>
 
-          {error && <div style={{ color:'#ff6666', fontSize:13, padding:'12px 16px', background:'#1a0000', borderRadius:6 }}>{error}</div>}
+          {error && <div style={{ color:'var(--accent-negative)', fontSize:13, padding:'12px 16px', background:'var(--bg-panel-negative)', borderRadius:6 }}>{error}</div>}
 
-          <button onClick={() => run()} style={{ background:LIME, color:'#000', border:'none', borderRadius:6, padding:'16px 24px', fontSize:17, fontWeight:700, cursor:'pointer', letterSpacing:'0.06em', fontFamily:"'Barlow Condensed',sans-serif", textTransform:'uppercase' }}>
+          <button onClick={() => run()} style={{ background:LIME, color:'var(--text-inverse)', border:'none', borderRadius:6, padding:'16px 24px', fontSize:17, fontWeight:700, cursor:'pointer', letterSpacing:'0.06em', fontFamily:"'Barlow Condensed',sans-serif", textTransform:'uppercase' }}>
             Run Signal Intel Pipeline →
           </button>
         </div>
@@ -1802,8 +1808,8 @@ Return a concise intelligence summary, recurring themes, specific public posts o
         <div style={{ textAlign:'center', marginBottom:32 }}>
           <div style={{ color:LIME, fontFamily:"'JetBrains Mono',monospace", fontSize:10, letterSpacing:'0.2em', marginBottom:8 }}>PIPELINE · {done}/6 · LIVE MONITORING + GROK</div>
           <h2 style={{ fontFamily:"'Barlow Condensed',sans-serif", fontSize:30, fontWeight:700, margin:'0 0 6px' }}>Analyzing {brand}</h2>
-          <p style={{ color:'#444', fontSize:13 }}>{period}</p>
-          <div style={{ marginTop:14, height:3, background:'#1a1a1a', borderRadius:2, maxWidth:280, margin:'14px auto 0' }}>
+          <p style={{ color:'var(--text-faint)', fontSize:13 }}>{period}</p>
+          <div style={{ marginTop:14, height:3, background:'var(--border-subtle)', borderRadius:2, maxWidth:280, margin:'14px auto 0' }}>
             <div style={{ height:'100%', width:`${(done/6)*100}%`, background:LIME, borderRadius:2, transition:'width 0.5s ease' }}/>
           </div>
         </div>
@@ -1818,40 +1824,41 @@ Return a concise intelligence summary, recurring themes, specific public posts o
       <div ref={reportRef} style={{ maxWidth:960, margin:'0 auto' }}>
 
         {/* Header */}
-        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:26, paddingBottom:18, borderBottom:'1px solid #181818' }}>
+        <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', marginBottom:26, paddingBottom:18, borderBottom:'1px solid var(--border-subtle)' }}>
           <div>
             <div style={{ color:LIME, fontFamily:"'JetBrains Mono',monospace", fontSize:10, letterSpacing:'0.18em', marginBottom:6 }}>
               SOCIAL MONITORING REPORT · 6 AGENTS
             </div>
             <SourceAttribution hasB24={hasB24} hasGrok={hasGrok} competitiveLite={competitiveLite} manualVerified={manualVerified} uploadDate={displayMetrics.manualUploadDate} />
             <h1 style={{ fontFamily:"'Barlow Condensed',sans-serif", fontSize:36, fontWeight:700, margin:'0 0 4px' }}>{brand}</h1>
-            <p style={{ color:'#555', fontSize:13, margin:0 }}>{period} · Prepared by Praxis Experiential</p>
+            <p style={{ color:'var(--text-muted)', fontSize:13, margin:0 }}>{period} · Prepared by Praxis Experiential</p>
             {manualVerified && (
-              <div style={{ marginTop:8, display:'inline-flex', alignItems:'center', gap:7, background:'#201900', border:'1px solid #ffda7566', borderRadius:6, padding:'6px 9px', color:'#ffda75', fontSize:10, fontFamily:"'JetBrains Mono',monospace", letterSpacing:'0.08em', textTransform:'uppercase' }}>
+              <div style={{ marginTop:8, display:'inline-flex', alignItems:'center', gap:7, background:'var(--accent-highlight-soft)', border:'1px solid var(--accent-highlight-border)', borderRadius:6, padding:'6px 9px', color:'var(--accent-highlight)', fontSize:10, fontFamily:"'JetBrains Mono',monospace", letterSpacing:'0.08em', textTransform:'uppercase' }}>
                 Manually verified data — {displayMetrics.manualUploadDate ? new Date(displayMetrics.manualUploadDate).toLocaleDateString() : 'uploaded this run'}
               </div>
             )}
           </div>
           <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:8 }}>
             <div data-pdf-hidden="true" style={{ display:'flex', gap:8, flexWrap:'wrap', justifyContent:'flex-end' }}>
-              <button type="button" data-testid="download-pdf" onClick={downloadPdf} disabled={pdfLoading} style={{ background:pdfLoading?'#222':'#1DA1F2', border:'1px solid #1DA1F244', borderRadius:6, padding:'9px 14px', color:'#fff', cursor:pdfLoading?'default':'pointer', fontSize:12, fontWeight:800 }}>{pdfLoading?'Exporting...':'Download PDF'}</button>
-              <button type="button" data-testid="ask-ai-header" onClick={() => setAiOpen(true)} style={{ background:LIME, border:'1px solid #000', borderRadius:6, padding:'9px 14px', color:'#000', cursor:'pointer', fontSize:12, fontWeight:800 }}>Ask AI</button>
-              <button onClick={() => setStep('setup')} style={{ background:'#111', border:'1px solid #222', borderRadius:6, padding:'9px 14px', color:'#666', cursor:'pointer', fontSize:12 }}>← New Report</button>
+              <button type="button" data-testid="download-pdf" onClick={downloadPdf} disabled={pdfLoading} style={{ background:pdfLoading?'var(--bg-surface-muted)':'var(--accent-info)', border:'1px solid var(--accent-info-border)', borderRadius:6, padding:'9px 14px', color:'var(--text-on-accent)', cursor:pdfLoading?'default':'pointer', fontSize:12, fontWeight:800 }}>{pdfLoading?'Exporting...':'Download PDF'}</button>
+              <button type="button" data-testid="ask-ai-header" onClick={() => setAiOpen(true)} style={{ background:LIME, border:'1px solid var(--text-inverse)', borderRadius:6, padding:'9px 14px', color:'var(--text-inverse)', cursor:'pointer', fontSize:12, fontWeight:800 }}>Ask AI</button>
+              <ThemeToggle />
+              <button onClick={() => setStep('setup')} style={{ background:'var(--bg-surface)', border:'1px solid var(--bg-surface-muted)', borderRadius:6, padding:'9px 14px', color:'var(--text-muted)', cursor:'pointer', fontSize:12 }}>← New Report</button>
             </div>
-            <div style={{ display:'flex', gap:4 }}>{AGENTS.map(a => <div key={a.key} title={a.name} style={{ width:8, height:8, borderRadius:'50%', background:'#44ff88' }}/>)}</div>
+            <div style={{ display:'flex', gap:4 }}>{AGENTS.map(a => <div key={a.key} title={a.name} style={{ width:8, height:8, borderRadius:'50%', background:'var(--accent-positive)' }}/>)}</div>
           </div>
         </div>
 
         {pdfError && (
-          <div data-pdf-hidden="true" style={{ background:'#1a0000', border:'1px solid #ff444433', borderRadius:8, color:'#ff8a8a', fontSize:12, lineHeight:1.55, padding:'10px 12px', marginBottom:14 }}>
+          <div data-pdf-hidden="true" style={{ background:'var(--bg-panel-negative)', border:'1px solid var(--accent-negative-border)', borderRadius:8, color:'var(--accent-negative)', fontSize:12, lineHeight:1.55, padding:'10px 12px', marginBottom:14 }}>
             PDF export failed: {pdfError}
           </div>
         )}
 
         {/* Executive Summary */}
-        <div style={{ background:'#0d1100', border:`1px solid ${LIME}20`, borderRadius:10, padding:'16px 20px', marginBottom:14 }}>
+        <div style={{ background:'var(--bg-panel-live)', border:`1px solid var(--accent-live-soft)`, borderRadius:10, padding:'16px 20px', marginBottom:14 }}>
           <div style={{ color:LIME, fontSize:10, letterSpacing:'0.18em', textTransform:'uppercase', marginBottom:8, fontFamily:"'JetBrains Mono',monospace" }}>Executive Summary · Analyst</div>
-          <p style={{ color:'#d0d0d0', lineHeight:1.75, margin:0, fontSize:14 }}>{displaySummary}</p>
+          <p style={{ color:'var(--text-secondary)', lineHeight:1.75, margin:0, fontSize:14 }}>{displaySummary}</p>
         </div>
 
         <SocialListeningReport brand={brand} metrics={metrics} demoMode={DEMO_MODE}/>
@@ -1860,7 +1867,7 @@ Return a concise intelligence summary, recurring themes, specific public posts o
 
         {/* Metrics */}
         <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, marginBottom:14 }}>
-          <Metric label="Total Mentions" value={fmt(displayMetrics.mentions.total)} sub={manualVerified?`Manually verified · ${displayMetrics.manualFileName || 'monitoring export'}`:hasB24?`Live tracking · ${displayMetrics.projectName||''}`:useEastWestDemo?'EastWest demo report':'No tracking source'}/>
+          <Metric label="Total Mentions" value={fmt(displayMetrics.mentions.total)} sub={manualVerified?`Manually verified · ${displayMetrics.manualFileName || 'monitoring export'}`:hasB24?`Live tracking${displayMetrics.mentionSampleCapped ? ' sample' : ''} · ${displayMetrics.projectName||''}`:useEastWestDemo?'EastWest demo report':'No tracking source'}/>
           <Metric label="Total Reach" value={fmt(displayMetrics.totalReach)} sub={manualVerified?'Confirmed tracking export':"30-day period"}/>
           <Metric label="Daily Avg" value={displayMetrics.mentions.dailyAvg}/>
         </div>
@@ -1868,14 +1875,14 @@ Return a concise intelligence summary, recurring themes, specific public posts o
         {/* Spike Drivers */}
         <div style={{ ...CARD, marginBottom:14 }}>
           <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:12 }}>
-            <div style={{ color:'#666', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase' }}>Spike Drivers · {hasGrok?'Grok-grounded':'monitoring-grounded'}</div>
+            <div style={{ color:'var(--text-muted)', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase' }}>Spike Drivers · {hasGrok?'Grok-grounded':'monitoring-grounded'}</div>
             <div style={{ display:'flex', gap:6 }}>
-              {hasB24 && <span style={{ background:`${LIME}18`, border:`1px solid ${LIME}30`, borderRadius:10, padding:'2px 8px', fontSize:9, color:LIME }}>LIVE ✓</span>}
-              {hasGrok && <span style={{ background:'#1DA1F222', border:'1px solid #1DA1F244', borderRadius:10, padding:'2px 8px', fontSize:9, color:'#1DA1F2' }}>GROK ✓</span>}
+              {hasB24 && <span style={{ background:'var(--accent-live-softer)', border:`1px solid var(--accent-live-border)`, borderRadius:10, padding:'2px 8px', fontSize:9, color:LIME }}>LIVE ✓</span>}
+              {hasGrok && <span style={{ background:'var(--accent-info-soft)', border:'1px solid var(--accent-info-border)', borderRadius:10, padding:'2px 8px', fontSize:9, color:'var(--accent-info)' }}>GROK ✓</span>}
             </div>
           </div>
           {displaySpikeDrivers?.map((d,i) => (
-            <div key={i} style={{ display:'flex', gap:12, fontSize:13, color:'#ccc', lineHeight:1.6, marginBottom:9 }}>
+            <div key={i} style={{ display:'flex', gap:12, fontSize:13, color:'var(--text-secondary)', lineHeight:1.6, marginBottom:9 }}>
               <span style={{ color:LIME, fontFamily:"'JetBrains Mono',monospace", fontSize:11, flexShrink:0, marginTop:2 }}>0{i+1}</span>{d}
             </div>
           ))}
@@ -1884,46 +1891,46 @@ Return a concise intelligence summary, recurring themes, specific public posts o
         {/* Sentiment + Events */}
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:14 }}>
           <div style={CARD}>
-            <div style={{ color:'#666', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:12 }}>Sentiment · Live Monitoring</div>
-            <SentBar label="Positive" count={displayMetrics.sentiment.positive.count} pct={displayMetrics.sentiment.positive.pct} color="#44ff88" onClick={() => searchSentiment('Positive')}/>
-            <SentBar label="Neutral"  count={displayMetrics.sentiment.neutral.count}  pct={displayMetrics.sentiment.neutral.pct}  color="#555" onClick={() => searchSentiment('Neutral')}/>
-            <SentBar label="Negative" count={displayMetrics.sentiment.negative.count} pct={displayMetrics.sentiment.negative.pct} color="#ff6666" onClick={() => searchSentiment('Negative')}/>
-            <p style={{ color:'#555', fontSize:12, margin:'10px 0 0', lineHeight:1.65 }}>{displaySentimentNarrative}</p>
+            <div style={{ color:'var(--text-muted)', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:12 }}>Sentiment · Live Monitoring</div>
+            <SentBar label="Positive" count={displayMetrics.sentiment.positive.count} pct={displayMetrics.sentiment.positive.pct} color="var(--accent-positive)" onClick={() => searchSentiment('Positive')}/>
+            <SentBar label="Neutral"  count={displayMetrics.sentiment.neutral.count}  pct={displayMetrics.sentiment.neutral.pct}  color="var(--text-muted)" onClick={() => searchSentiment('Neutral')}/>
+            <SentBar label="Negative" count={displayMetrics.sentiment.negative.count} pct={displayMetrics.sentiment.negative.pct} color="var(--accent-negative)" onClick={() => searchSentiment('Negative')}/>
+            <p style={{ color:'var(--text-muted)', fontSize:12, margin:'10px 0 0', lineHeight:1.65 }}>{displaySentimentNarrative}</p>
           </div>
           <div style={CARD}>
-            <div style={{ color:'#666', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:12 }}>Monitoring Events · Context Scout</div>
+            <div style={{ color:'var(--text-muted)', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:12 }}>Monitoring Events · Context Scout</div>
             {displayEvents.length > 0
               ? displayEvents.slice(0,3).map((e,i) => (
                 <div key={i} style={{ marginBottom:10 }}>
-                  <div style={{ color:'#d0d0d0', fontSize:12, fontWeight:600, marginBottom:2 }}>{e.date}</div>
-                  <div style={{ color:'#666', fontSize:11, lineHeight:1.5 }}>{e.description}</div>
+                  <div style={{ color:'var(--text-secondary)', fontSize:12, fontWeight:600, marginBottom:2 }}>{e.date}</div>
+                  <div style={{ color:'var(--text-muted)', fontSize:11, lineHeight:1.5 }}>{e.description}</div>
                 </div>
               ))
-              : <p style={{ color:'#555', fontSize:12, lineHeight:1.6 }}>{context?.qualitativeSignals || 'No significant events detected.'}</p>
+              : <p style={{ color:'var(--text-muted)', fontSize:12, lineHeight:1.6 }}>{context?.qualitativeSignals || 'No significant events detected.'}</p>
             }
           </div>
         </div>
 
         {/* Grok signals */}
         {hasGrok && context.grokSignals && (
-          <div style={{ ...CARD, marginBottom:14, borderColor:'#1DA1F222' }}>
+          <div style={{ ...CARD, marginBottom:14, borderColor:'var(--accent-info-soft)' }}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
-              <div style={{ color:'#666', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase' }}>X/Twitter Signals · Grok Live Search</div>
-              <span style={{ background:'#1DA1F222', border:'1px solid #1DA1F244', borderRadius:10, padding:'2px 8px', fontSize:9, color:'#1DA1F2' }}>GROK ✓</span>
+              <div style={{ color:'var(--text-muted)', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase' }}>X/Twitter Signals · Grok Live Search</div>
+              <span style={{ background:'var(--accent-info-soft)', border:'1px solid var(--accent-info-border)', borderRadius:10, padding:'2px 8px', fontSize:9, color:'var(--accent-info)' }}>GROK ✓</span>
             </div>
-            <p style={{ color:'#aaa', fontSize:12, lineHeight:1.7 }}>{context.grokSignals.substring(0, 700)}</p>
+            <p style={{ color:'var(--text-muted)', fontSize:12, lineHeight:1.7 }}>{context.grokSignals.substring(0, 700)}</p>
           </div>
         )}
 
         {/* Topics */}
         {context?.topTopics?.length > 0 && (
           <div style={{ ...CARD, marginBottom:14 }}>
-            <div style={{ color:'#666', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:12 }}>Topic Clusters · Signal AI</div>
+            <div style={{ color:'var(--text-muted)', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:12 }}>Topic Clusters · Signal AI</div>
             <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:8 }}>
               {context.topTopics.slice(0,6).map((t,i) => (
-                <div key={i} style={{ background:'#0d0d0d', border:'1px solid #1a1a1a', borderRadius:8, padding:'10px 12px' }}>
-                  <div style={{ color:'#f0f0f0', fontSize:12, fontWeight:600, marginBottom:4 }}>{t.name}</div>
-                  <div style={{ color:'#555', fontSize:11 }}>{t.mentions} mentions · {t.sentiment}</div>
+                <div key={i} style={{ background:'var(--bg-surface-muted)', border:'1px solid var(--border-subtle)', borderRadius:8, padding:'10px 12px' }}>
+                  <div style={{ color:'var(--text-primary)', fontSize:12, fontWeight:600, marginBottom:4 }}>{t.name}</div>
+                  <div style={{ color:'var(--text-muted)', fontSize:11 }}>{t.mentions} mentions · {t.sentiment}</div>
                 </div>
               ))}
             </div>
@@ -1932,11 +1939,11 @@ Return a concise intelligence summary, recurring themes, specific public posts o
 
         {/* SOV */}
         <div style={{ ...CARD, marginBottom:14 }}>
-          <div style={{ color:'#666', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:12 }}>Share of Voice · Verified Metrics</div>
+          <div style={{ color:'var(--text-muted)', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:12 }}>Share of Voice · Verified Metrics</div>
           {competitive.sovData?.map((s,i) => <SOVRow key={i} {...s}/>)}
           {competitive.sovData?.some(s => !s.found) && (
-            <div style={{ marginTop:12, padding:'10px 14px', background:'#0a0a0a', borderRadius:6, border:'1px solid #1e1e1e' }}>
-              <p style={{ color:'#444', fontSize:11, fontFamily:"'JetBrains Mono',monospace", margin:0 }}>
+            <div style={{ marginTop:12, padding:'10px 14px', background:'var(--bg-surface-muted)', borderRadius:6, border:'1px solid var(--border)' }}>
+              <p style={{ color:'var(--text-faint)', fontSize:11, fontFamily:"'JetBrains Mono',monospace", margin:0 }}>
                 // Missing brands need tracking sources → <a href="/setup" style={{ color:LIME, textDecoration:'none' }}>Create source</a>
               </p>
             </div>
@@ -1948,12 +1955,12 @@ Return a concise intelligence summary, recurring themes, specific public posts o
         {/* Competitor notes */}
         {competitive.competitorNotes?.length > 0 && (
           <div style={{ ...CARD, marginBottom:14 }}>
-            <div style={{ color:'#666', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:12 }}>Competitor Intelligence · Live + Grok</div>
+            <div style={{ color:'var(--text-muted)', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:12 }}>Competitor Intelligence · Live + Grok</div>
             <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(220px, 1fr))', gap:10 }}>
               {competitive.competitorNotes.map((c,i) => (
-                <div key={i} style={{ background:'#0d0d0d', border:'1px solid #1a1a1a', borderRadius:8, padding:'12px 14px' }}>
+                <div key={i} style={{ background:'var(--bg-surface-muted)', border:'1px solid var(--border-subtle)', borderRadius:8, padding:'12px 14px' }}>
                   <div style={{ color:LIME, fontSize:12, fontWeight:600, marginBottom:8 }}>{c.brand}</div>
-                  <div style={{ fontSize:12, color:'#888', lineHeight:1.55 }}>{c.observation}</div>
+                  <div style={{ fontSize:12, color:'var(--text-muted)', lineHeight:1.55 }}>{c.observation}</div>
                 </div>
               ))}
             </div>
@@ -1963,13 +1970,13 @@ Return a concise intelligence summary, recurring themes, specific public posts o
         {/* Themes */}
         <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:10, marginBottom:14 }}>
           {[
-            { label:'Positive Drivers', items:report.positiveThemes, color:'#44ff88', bg:'#001a08' },
-            { label:'Negative Themes',  items:report.negativeThemes,  color:'#ff6666', bg:'#1a0000' },
+            { label:'Positive Drivers', items:report.positiveThemes, color:'var(--accent-positive)', bg:'var(--bg-panel-positive)', border:'var(--accent-live-border)' },
+            { label:'Negative Themes',  items:report.negativeThemes,  color:'var(--accent-negative)', bg:'var(--bg-panel-negative)', border:'var(--accent-negative-border)' },
           ].map((s,i) => (
-            <div key={i} style={{ background:s.bg, border:`1px solid ${s.color}18`, borderRadius:10, padding:'16px 20px' }}>
+            <div key={i} style={{ background:s.bg, border:`1px solid ${s.border}`, borderRadius:10, padding:'16px 20px' }}>
               <div style={{ color:s.color, fontSize:10, letterSpacing:'0.15em', textTransform:'uppercase', marginBottom:10, fontFamily:"'JetBrains Mono',monospace" }}>{s.label}</div>
               {s.items?.map((item,j) => (
-                <div key={j} style={{ display:'flex', gap:10, marginBottom:9, fontSize:13, color:'#bbb', lineHeight:1.55 }}>
+                <div key={j} style={{ display:'flex', gap:10, marginBottom:9, fontSize:13, color:'var(--text-secondary)', lineHeight:1.55 }}>
                   <span style={{ color:s.color, flexShrink:0 }}>→</span>{item}
                 </div>
               ))}
@@ -1979,30 +1986,30 @@ Return a concise intelligence summary, recurring themes, specific public posts o
 
         {/* Scam alert */}
         {report.scamRiskAlert && report.scamRiskAlert !== 'null' && (
-          <div style={{ background:'#1a0800', border:'1px solid #ff880018', borderRadius:10, padding:'12px 20px', marginBottom:14, display:'flex', gap:12 }}>
-            <span style={{ color:'#ff8800', fontSize:14, flexShrink:0 }}>⚠</span>
+          <div style={{ background:'var(--bg-panel-warning)', border:'1px solid var(--accent-highlight-border)', borderRadius:10, padding:'12px 20px', marginBottom:14, display:'flex', gap:12 }}>
+            <span style={{ color:'var(--accent-warning)', fontSize:14, flexShrink:0 }}>⚠</span>
             <div>
-              <div style={{ color:'#ff8800', fontSize:10, letterSpacing:'0.15em', textTransform:'uppercase', marginBottom:4, fontFamily:"'JetBrains Mono',monospace" }}>Scam / Fraud Risk Alert</div>
-              <p style={{ color:'#cc8844', fontSize:13, margin:0, lineHeight:1.6 }}>{report.scamRiskAlert}</p>
+              <div style={{ color:'var(--accent-warning)', fontSize:10, letterSpacing:'0.15em', textTransform:'uppercase', marginBottom:4, fontFamily:"'JetBrains Mono',monospace" }}>Scam / Fraud Risk Alert</div>
+              <p style={{ color:'var(--accent-highlight)', fontSize:13, margin:0, lineHeight:1.6 }}>{report.scamRiskAlert}</p>
             </div>
           </div>
         )}
 
         {/* Recommendations */}
-        <div style={{ background:'#0d1100', border:`1px solid ${LIME}20`, borderRadius:10, padding:'16px 20px', marginBottom:18 }}>
+        <div style={{ background:'var(--bg-panel-live)', border:`1px solid var(--accent-live-soft)`, borderRadius:10, padding:'16px 20px', marginBottom:18 }}>
           <div style={{ color:LIME, fontSize:10, letterSpacing:'0.18em', textTransform:'uppercase', marginBottom:14, fontFamily:"'JetBrains Mono',monospace" }}>Strategic Recommendations · Report Builder</div>
           {report.recommendations?.map((r,i) => (
             <div key={i} style={{ display:'flex', gap:14, marginBottom:12, alignItems:'flex-start' }}>
               <span style={{ color:LIME, fontFamily:"'JetBrains Mono',monospace", fontSize:11, flexShrink:0, marginTop:3 }}>0{i+1}</span>
-              <p style={{ color:'#d0d0d0', fontSize:14, margin:0, lineHeight:1.7 }}>{r}</p>
+              <p style={{ color:'var(--text-secondary)', fontSize:14, margin:0, lineHeight:1.7 }}>{r}</p>
             </div>
           ))}
         </div>
 
         {/* Footer */}
-        <div style={{ paddingTop:14, borderTop:'1px solid #141414', display:'flex', justifyContent:'space-between' }}>
-          <span style={{ color:'#2a2a2a', fontSize:11, fontFamily:"'JetBrains Mono',monospace" }}>// Signal Intel + Grok · {hasB24?'Live primary data':manualVerified?'Manual primary + live competitor data':'Set up tracking source for live data'}</span>
-          <span style={{ color:'#2a2a2a', fontSize:11 }}>Signal Intel v3 · Praxis Experiential</span>
+        <div style={{ paddingTop:14, borderTop:'1px solid var(--border-subtle)', display:'flex', justifyContent:'space-between' }}>
+          <span style={{ color:'var(--border-strong)', fontSize:11, fontFamily:"'JetBrains Mono',monospace" }}>// Signal Intel + Grok · {hasB24?'Live primary data':manualVerified?'Manual primary + live competitor data':'Set up tracking source for live data'}</span>
+          <span style={{ color:'var(--border-strong)', fontSize:11 }}>Signal Intel v3 · Praxis Experiential</span>
         </div>
 
       </div>
@@ -2012,27 +2019,27 @@ Return a concise intelligence summary, recurring themes, specific public posts o
       <Drawer open={aiOpen} title="Ask AI" eyebrow="Claude · Report Context" onClose={() => setAiOpen(false)}>
         <div style={{ display:'flex', flexDirection:'column', gap:12, marginBottom:14 }}>
           {aiMessages.length === 0 && (
-            <div style={{ background:'#111', border:'1px solid #202020', borderRadius:8, padding:14 }}>
-              <p style={{ color:'#888', fontSize:13, lineHeight:1.6, margin:0 }}>Ask about the report: why sentiment moved, what to post next, which channels matter, or where the risks are.</p>
+            <div style={{ background:'var(--bg-surface)', border:'1px solid var(--border)', borderRadius:8, padding:14 }}>
+              <p style={{ color:'var(--text-muted)', fontSize:13, lineHeight:1.6, margin:0 }}>Ask about the report: why sentiment moved, what to post next, which channels matter, or where the risks are.</p>
             </div>
           )}
           {aiMessages.map((m,i) => (
-            <div key={i} style={{ alignSelf:m.role==='user'?'flex-end':'stretch', maxWidth:m.role==='user'?'88%':'100%', background:m.role==='user'?LIME:'#111', color:m.role==='user'?'#000':'#cfcfcf', border:m.role==='user'?'none':'1px solid #202020', borderRadius:8, padding:'11px 13px', fontSize:13, lineHeight:1.65, whiteSpace:'pre-wrap' }}>
+            <div key={i} style={{ alignSelf:m.role==='user'?'flex-end':'stretch', maxWidth:m.role==='user'?'88%':'100%', background:m.role==='user'?LIME:'var(--bg-surface)', color:m.role==='user'?'var(--text-inverse)':'var(--text-secondary)', border:m.role==='user'?'none':'1px solid var(--border)', borderRadius:8, padding:'11px 13px', fontSize:13, lineHeight:1.65, whiteSpace:'pre-wrap' }}>
               {m.text}
             </div>
           ))}
-          {aiLoading && <div style={{ color:'#777', fontSize:12, fontFamily:"'JetBrains Mono',monospace" }}>Claude is reading the report...</div>}
+          {aiLoading && <div style={{ color:'var(--text-muted)', fontSize:12, fontFamily:"'JetBrains Mono',monospace" }}>Claude is reading the report...</div>}
           <ErrorMessage message={aiError}/>
         </div>
-        <form onSubmit={askAI} style={{ position:'sticky', bottom:0, background:'#0b0b0b', paddingTop:12, display:'flex', gap:8 }}>
-          <textarea value={aiQuestion} onChange={e => setAiQuestion(e.target.value)} placeholder="Why is sentiment mostly neutral?" rows={3} style={{ flex:1, resize:'vertical', background:'#111', border:'1px solid #252525', borderRadius:6, color:'#f0f0f0', padding:11, fontSize:13 }}/>
-          <button disabled={aiLoading || !aiQuestion.trim()} style={{ alignSelf:'stretch', background:aiLoading?'#222':LIME, color:'#000', border:'none', borderRadius:6, padding:'0 14px', cursor:aiLoading?'default':'pointer', fontSize:12, fontWeight:800 }}>Send</button>
+        <form onSubmit={askAI} style={{ position:'sticky', bottom:0, background:'var(--bg-surface-subtle)', paddingTop:12, display:'flex', gap:8 }}>
+          <textarea value={aiQuestion} onChange={e => setAiQuestion(e.target.value)} placeholder="Why is sentiment mostly neutral?" rows={3} style={{ flex:1, resize:'vertical', background:'var(--bg-surface)', border:'1px solid var(--border-strong)', borderRadius:6, color:'var(--text-primary)', padding:11, fontSize:13 }}/>
+          <button disabled={aiLoading || !aiQuestion.trim()} style={{ alignSelf:'stretch', background:aiLoading?'var(--bg-surface-muted)':LIME, color:'var(--text-inverse)', border:'none', borderRadius:6, padding:'0 14px', cursor:aiLoading?'default':'pointer', fontSize:12, fontWeight:800 }}>Send</button>
         </form>
       </Drawer>
 
       <Drawer open={sentimentOpen} title={`${sentimentLabel || 'Sentiment'} Posts`} eyebrow="Powered by Grok" onClose={() => setSentimentOpen(false)}>
         {sentimentLoading
-          ? <div style={{ color:'#777', fontSize:12, fontFamily:"'JetBrains Mono',monospace" }}>Searching live posts...</div>
+          ? <div style={{ color:'var(--text-muted)', fontSize:12, fontFamily:"'JetBrains Mono',monospace" }}>Searching live posts...</div>
           : <>
               <ErrorMessage message={sentimentError}/>
               <TextBlock text={sentimentResult}/>

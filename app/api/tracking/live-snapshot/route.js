@@ -1,6 +1,7 @@
 import { getLiveSnapshot } from '../utils';
-import { toClientSafeError } from '../../../../lib/brand24-rest';
+import { Brand24RestError, toClientSafeError } from '../../../../lib/brand24-rest';
 
+const LIVE_SNAPSHOT_TIMEOUT_MS = 90000;
 export async function POST(request) {
   try {
     const body = await request.json();
@@ -19,18 +20,29 @@ export async function POST(request) {
       accountIdSuffix: accountId ? String(accountId).slice(-4) : '',
     });
 
-    const snapshot = await getLiveSnapshot({
-      accountId,
-      brand,
-      aliases: Array.isArray(body.aliases) ? body.aliases : [],
-      dateFrom: body.dateFrom,
-      dateTo: body.dateTo,
-      countryFilter: body.philippinesOnly ? 'PH' : '',
-      filters: {
-        sentiment: body.sentiment,
-        category: body.category,
-      },
+    let timeoutId;
+    const timeout = new Promise((_, reject) => {
+      timeoutId = setTimeout(() => reject(new Brand24RestError(
+        `Live tracking snapshot took longer than ${Math.round(LIVE_SNAPSHOT_TIMEOUT_MS / 1000)}s. Try a narrower date range or retry shortly.`,
+        { code: 'TIMEOUT' }
+      )), LIVE_SNAPSHOT_TIMEOUT_MS);
     });
+
+    const snapshot = await Promise.race([
+      getLiveSnapshot({
+        accountId,
+        brand,
+        aliases: Array.isArray(body.aliases) ? body.aliases : [],
+        dateFrom: body.dateFrom,
+        dateTo: body.dateTo,
+        countryFilter: body.philippinesOnly ? 'PH' : '',
+        filters: {
+          sentiment: body.sentiment,
+          category: body.category,
+        },
+      }),
+      timeout,
+    ]).finally(() => clearTimeout(timeoutId));
 
     return Response.json(snapshot);
   } catch (error) {
