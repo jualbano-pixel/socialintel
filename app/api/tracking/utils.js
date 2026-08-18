@@ -245,19 +245,27 @@ export function summarizeMentions({ brand, project, mentions, reach, dateFrom, d
   };
 }
 
-export async function getLiveSnapshot({ accountId, brand, aliases = [], dateFrom, dateTo, filters = {}, countryFilter = '' }) {
-  console.info('[Tracking live snapshot] project list start', { brand, dateFrom, dateTo, countryFilter });
-  const projects = await listProjects(accountId);
-  console.info('[Tracking live snapshot] project list done', { brand, dateFrom, dateTo, projectCount: projects.length });
-  const project = resolveProject(projects, brand, aliases);
+export async function getLiveSnapshot({ accountId, brand, aliases = [], projectId: storedProjectId = '', projectName: storedProjectName = '', dateFrom, dateTo, filters = {}, countryFilter = '' }) {
+  const knownProjectId = String(storedProjectId || '').trim();
+  let projects = [];
+  let project = knownProjectId
+    ? { id: knownProjectId, name: storedProjectName || brand }
+    : null;
+  if (!project) {
+    console.info('[Tracking live snapshot] project list start', { brand, dateFrom, dateTo, countryFilter });
+    projects = await listProjects(accountId);
+    console.info('[Tracking live snapshot] project list done', { brand, dateFrom, dateTo, projectCount: projects.length });
+    project = resolveProject(projects, brand, aliases);
+  }
   console.info('[Tracking live snapshot] project resolution', {
     brand,
     dateFrom,
     dateTo,
     countryFilter,
+    usedStoredProjectId: !!knownProjectId,
     projectCount: projects.length,
     matchedProject: project ? { id: itemId(project), name: itemName(project) } : null,
-    candidates: projectDiagnostics(projects, brand, aliases).filter(item => item.matches.length).slice(0, 8),
+    candidates: knownProjectId ? [] : projectDiagnostics(projects, brand, aliases).filter(item => item.matches.length).slice(0, 8),
   });
   if (!project) {
     return {

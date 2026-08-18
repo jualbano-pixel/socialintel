@@ -33,6 +33,8 @@ export async function POST(request) {
         accountId,
         brand,
         aliases: Array.isArray(body.aliases) ? body.aliases : [],
+        projectId: body.projectId,
+        projectName: body.projectName,
         dateFrom: body.dateFrom,
         dateTo: body.dateTo,
         countryFilter: body.philippinesOnly ? 'PH' : '',

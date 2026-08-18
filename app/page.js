@@ -167,6 +167,8 @@ function parseGrokText(data) {
 // ── Date parser ───────────────────────────────────────────────
 function parsePeriod(period) {
   try {
+    const isoRange = String(period || '').match(/(\d{4}-\d{2}-\d{2})\s*(?:to|through|–|-)\s*(\d{4}-\d{2}-\d{2})/i);
+    if (isoRange) return { startDate: isoRange[1], endDate: isoRange[2] };
     const months = { january:'01',february:'02',march:'03',april:'04',may:'05',june:'06',july:'07',august:'08',september:'09',october:'10',november:'11',december:'12' };
     const clean = period.toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
     const crossMonth = clean.match(/([a-z]+)\s+(\d{1,2})\s*-\s*([a-z]+)\s+(\d{1,2}),?\s*(\d{4})/);
@@ -225,15 +227,32 @@ async function claudeB24(prompt, maxTokens = 2200) {
   } catch(e) { console.warn('Claude+B24:', e.message); return ''; }
 }
 
-async function liveTrackingSnapshot(brand, startDate, endDate) {
+function monitorProjectId(monitor) {
+  return monitor?.monitorId || monitor?.projectId || monitor?.id || '';
+}
+
+function setupMonitorForBrand(setup, brand, role = '') {
+  const monitors = Array.isArray(setup?.monitors) ? setup.monitors : [];
+  const scoped = role ? monitors.filter(monitor => monitor.role === role) : monitors;
+  return scoped.find(monitor => sameBrandName(monitor.name, brand))
+    || (!role ? monitors.find(monitor => sameBrandName(monitor.name, brand)) : null)
+    || (role === 'primary' && sameBrandName(setup?.primaryBrand, brand) ? monitors.find(monitor => monitor.role === 'primary') : null)
+    || null;
+}
+
+async function liveTrackingSnapshot(brand, startDate, endDate, monitor = null) {
   const aliases = BRAND24_PROJECT_ALIASES[String(brand || '').toLowerCase().trim()] || BRAND24_PROJECT_ALIASES[brandKey(brand)] || [];
   const setup = savedSetupForBrand(brand);
+  const storedMonitor = monitor || setupMonitorForBrand(setup, brand);
+  const storedProjectId = monitorProjectId(storedMonitor);
   const response = await fetch('/api/tracking/live-snapshot', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       brand,
       aliases,
+      projectId: storedProjectId,
+      projectName: storedMonitor?.name || '',
       dateFrom: startDate,
       dateTo: endDate,
       philippinesOnly: setup?.philippinesOnly === true,
@@ -242,6 +261,21 @@ async function liveTrackingSnapshot(brand, startDate, endDate) {
   const data = await response.json();
   if (!response.ok || data.error) throw new Error(data.error || `Live tracking failed with ${response.status}`);
   return data;
+}
+
+async function pullStoredMonitorRow(monitor, startDate, endDate) {
+  const data = await liveTrackingSnapshot(monitor.name, startDate, endDate, monitor);
+  return {
+    brand: monitor.name,
+    mentions: Number(data.totalMentions) || 0,
+    percentage: 0,
+    isClient: monitor.role === 'primary',
+    found: !!data.found,
+    projectName: data.projectName || monitor.name,
+    projectId: data.projectId || monitorProjectId(monitor),
+    observation: `${monitor.name} registered ${fmt(Number(data.totalMentions) || 0)} verified mentions in the same period.`,
+    sourceLabel: 'Live',
+  };
 }
 
 function savedSetupForBrand(brand) {
@@ -456,6 +490,8 @@ Return valid JSON. Use client-facing language only: say "our monitoring data", "
 }
 
 async function competitiveIntelAgent(brand, competitors, startDate, endDate, grokSignals, manualClientMetrics = null) {
+  const setup = savedSetupForBrand(brand);
+  const storedMonitors = (setup?.monitors || []).filter(monitor => monitorProjectId(monitor));
   if (manualClientMetrics) {
     console.log('[Competitive Intel] manual/PDF path resolving competitors sequentially', { brand, competitors, startDate, endDate });
     const competitorRows = [];
@@ -470,7 +506,10 @@ async function competitiveIntelAgent(brand, competitors, startDate, endDate, gro
           found: true,
         });
       } else {
-        competitorRows.push(await pullBrand24CompetitorRow(competitor, startDate, endDate));
+        const storedMonitor = setupMonitorForBrand(setup, competitor, 'competitor');
+        competitorRows.push(storedMonitor && monitorProjectId(storedMonitor)
+          ? await pullStoredMonitorRow(storedMonitor, startDate, endDate)
+          : await pullBrand24CompetitorRow(competitor, startDate, endDate));
       }
     }
     const clientRow = {
@@ -503,6 +542,52 @@ async function competitiveIntelAgent(brand, competitors, startDate, endDate, gro
         mentions: row.mentions || 0,
         sourceLabel: row.sourceLabel || (row.manualVerified ? 'Manual' : 'Live'),
         availableProjects: row.availableProjects || [],
+      })),
+    };
+  }
+
+  if (storedMonitors.length) {
+    console.log('[Competitive Intel] using stored tracking monitor ids', {
+      brand,
+      monitors: storedMonitors.map(monitor => ({ role: monitor.role, name: monitor.name, monitorId: monitorProjectId(monitor) })),
+      startDate,
+      endDate,
+    });
+    const primaryMonitor = setupMonitorForBrand(setup, brand, 'primary') || storedMonitors.find(monitor => monitor.role === 'primary');
+    const rows = [];
+    if (primaryMonitor && monitorProjectId(primaryMonitor)) rows.push(await pullStoredMonitorRow(primaryMonitor, startDate, endDate));
+    const usedMonitorIds = new Set(primaryMonitor ? [monitorProjectId(primaryMonitor)] : []);
+    for (const competitor of competitors) {
+      const monitor = setupMonitorForBrand(setup, competitor, 'competitor');
+      const projectId = monitorProjectId(monitor);
+      if (monitor && projectId && !usedMonitorIds.has(projectId)) {
+        rows.push(await pullStoredMonitorRow(monitor, startDate, endDate));
+        usedMonitorIds.add(projectId);
+      } else if (!projectId) {
+        rows.push(await pullBrand24CompetitorRow(competitor, startDate, endDate));
+      }
+    }
+    const allRows = rows;
+    const total = allRows.reduce((sum, row) => sum + (row.found ? Number(row.mentions) || 0 : 0), 0) || 1;
+    return {
+      sovData: allRows.map(row => ({
+        ...row,
+        brand: row.isClient ? brand : displayCompetitorName(row.brand),
+        percentage: row.found ? Number((((Number(row.mentions) || 0) / total) * 100).toFixed(1)) : 0,
+      })),
+      competitorNotes: rows
+        .filter(row => !row.isClient && row.found)
+        .map(row => ({
+          brand: displayCompetitorName(row.brand),
+          observation: `${row.brand} registered ${fmt(row.mentions)} verified mentions from its saved tracking source.`,
+        })),
+      diagnostics: allRows.map(row => ({
+        brand: row.isClient ? brand : displayCompetitorName(row.brand),
+        found: row.found,
+        projectName: row.projectName || '',
+        projectId: row.projectId || '',
+        mentions: row.mentions || 0,
+        sourceLabel: row.sourceLabel || 'Live',
       })),
     };
   }
@@ -1339,7 +1424,16 @@ export default function SignalIntel() {
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const prefilledBrand = params.get('brand')?.trim();
-    if (prefilledBrand) setBrand(prefilledBrand);
+    if (!prefilledBrand) return;
+    setBrand(prefilledBrand);
+    const setup = savedSetupForBrand(prefilledBrand);
+    const setupCompetitors = (setup?.monitors || [])
+      .filter(monitor => monitor.role !== 'primary' && monitor.name)
+      .map(monitor => monitor.name);
+    if (setupCompetitors.length) setComp(setupCompetitors);
+    if (setup?.dateRange?.dateFrom && setup?.dateRange?.dateTo) {
+      setPeriod(`${setup.dateRange.dateFrom} to ${setup.dateRange.dateTo}`);
+    }
   }, []);
 
   const sa = (k, v) => setAgents(p => ({ ...p, [k]: v }));
@@ -1467,8 +1561,11 @@ export default function SignalIntel() {
       if (!brand.trim()) throw new Error('Enter a client / brand before running.');
       const effectivePeriod = confirmedManualData?.dateRange?.trim() || period;
       if (!effectivePeriod.trim()) throw new Error('Enter a reporting period or upload a PDF with a readable date range before running.');
-      const activeCompetitors = competitors.length ? competitors : (confirmedManualData ? defaultCompetitorsForBrand(brand) : []);
-      if (confirmedManualData && !competitors.length && activeCompetitors.length) setComp(activeCompetitors);
+      const setupCompetitors = (savedSetupForBrand(brand)?.monitors || [])
+        .filter(monitor => monitor.role !== 'primary' && monitor.name)
+        .map(monitor => monitor.name);
+      const activeCompetitors = competitors.length ? competitors : (setupCompetitors.length ? setupCompetitors : (confirmedManualData ? defaultCompetitorsForBrand(brand) : []));
+      if (!competitors.length && activeCompetitors.length) setComp(activeCompetitors);
       const { startDate, endDate } = parsePeriod(effectivePeriod);
 
       sa('listener', 'running');

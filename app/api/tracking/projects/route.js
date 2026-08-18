@@ -15,6 +15,7 @@ function setupRecord(body, created) {
       role: item.role,
       name: item.name,
       monitorId: item.projectId,
+      projectId: item.projectId,
       status: item.status,
     })),
     createdAt: new Date().toISOString(),
