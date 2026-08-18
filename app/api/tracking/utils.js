@@ -3,7 +3,7 @@ import { getFilteredProjectSources } from '../../../lib/brand24-mcp';
 
 const SOURCE_COLORS = ['#2f86de', '#dc37a5', '#e74c3c', '#f78fb3', '#33b6b4', '#7155d9', '#f4d03f', '#7ed6df'];
 const SOCIAL_CATEGORIES = new Set(['facebook', 'instagram', 'tiktok', 'twitter', 'x', 'youtube', 'reddit', 'socialmedia']);
-const SNAPSHOT_STAGE_TIMEOUT_MS = 60000;
+const SNAPSHOT_STAGE_TIMEOUT_MS = 120000;
 const LIVE_MENTION_SAMPLE_LIMIT = 2500;
 
 export function brandKey(value) {
@@ -346,13 +346,79 @@ export async function getLiveSnapshot({ accountId, brand, aliases = [], projectI
   const projectName = itemName(project);
   let mentionsResult;
   let reach;
+  const mentionSampleLimit = sourceFilter?.type === 'mcp' && sourceFilter.country
+    ? 1000
+    : LIVE_MENTION_SAMPLE_LIMIT;
+  const filteredSourcePromise = sourceFilter?.type === 'mcp' && sourceFilter.country
+    ? (async () => {
+      try {
+        console.info('[Tracking live snapshot] MCP source filter start', { brand, projectId, projectName, dateFrom, dateTo, sourceFilter });
+        const sourceSample = await getFilteredProjectSources({
+          projectId,
+          dateFrom,
+          dateTo,
+          country: sourceFilter.country,
+          language: sourceFilter.language || 'en',
+        });
+        console.info('[Tracking live snapshot] MCP source filter done', {
+          brand,
+          projectId,
+          projectName,
+          records: sourceSample.recordCount,
+          country: sourceSample.country,
+          language: sourceSample.language,
+        });
+        return { sourceSample };
+      } catch (error) {
+        console.warn('[Tracking live snapshot] MCP source filter unavailable', {
+          brand,
+          projectId,
+          projectName,
+          message: error.message,
+        });
+        return { error };
+      }
+    })()
+    : null;
+  const reachPromise = (async () => {
+    try {
+      console.info('[Tracking live snapshot] reach stage start', { brand, projectId, projectName, dateFrom, dateTo });
+      const reachResult = await getMentionsReach(projectId, dateFrom, dateTo, {
+        timeoutMs: SNAPSHOT_STAGE_TIMEOUT_MS,
+        logger: console,
+      });
+      console.info('[Tracking live snapshot] reach stage done', {
+        brand,
+        projectId,
+        projectName,
+        dateFrom,
+        dateTo,
+        totalReach: reachResult.totalReach,
+        socialMediaReach: reachResult.socialMediaReachTotal,
+        nonSocialMediaReach: reachResult.nonSocialMediaReachTotal,
+      });
+      return { reach: reachResult };
+    } catch (error) {
+      console.error('[Tracking live snapshot] reach stage error', {
+        brand,
+        projectId,
+        projectName,
+        dateFrom,
+        dateTo,
+        message: error.message,
+        code: error.code,
+        status: error.status,
+      });
+      return { error };
+    }
+  })();
 
   try {
     console.info('[Tracking live snapshot] mentions stage start', { brand, projectId, projectName, dateFrom, dateTo });
     mentionsResult = await getMentions(projectId, dateFrom, dateTo, {
       ...filters,
       timeoutMs: SNAPSHOT_STAGE_TIMEOUT_MS,
-      maxMentions: LIVE_MENTION_SAMPLE_LIMIT,
+      maxMentions: mentionSampleLimit,
       logger: console,
     });
     console.info('[Tracking live snapshot] mentions stage done', {
@@ -380,35 +446,9 @@ export async function getLiveSnapshot({ accountId, brand, aliases = [], projectI
     throw error;
   }
 
-  try {
-    console.info('[Tracking live snapshot] reach stage start', { brand, projectId, projectName, dateFrom, dateTo });
-    reach = await getMentionsReach(projectId, dateFrom, dateTo, {
-      timeoutMs: SNAPSHOT_STAGE_TIMEOUT_MS,
-      logger: console,
-    });
-    console.info('[Tracking live snapshot] reach stage done', {
-      brand,
-      projectId,
-      projectName,
-      dateFrom,
-      dateTo,
-      totalReach: reach.totalReach,
-      socialMediaReach: reach.socialMediaReachTotal,
-      nonSocialMediaReach: reach.nonSocialMediaReachTotal,
-    });
-  } catch (error) {
-    console.error('[Tracking live snapshot] reach stage error', {
-      brand,
-      projectId,
-      projectName,
-      dateFrom,
-      dateTo,
-      message: error.message,
-      code: error.code,
-      status: error.status,
-    });
-    throw error;
-  }
+  const reachResult = await reachPromise;
+  if (reachResult.error) throw reachResult.error;
+  reach = reachResult.reach;
 
   const { mentions, pages } = mentionsResult;
   console.info('[Tracking live snapshot] mentions pulled', {
@@ -436,33 +476,19 @@ export async function getLiveSnapshot({ accountId, brand, aliases = [], projectI
     pages,
     countryFilter,
     mentionPull: {
-      maxMentions: LIVE_MENTION_SAMPLE_LIMIT,
+      maxMentions: mentionSampleLimit,
       capped: mentionsResult.capped,
       hasMore: mentionsResult.hasMore,
     },
   });
   if (sourceFilter?.type === 'mcp' && sourceFilter.country) {
-    try {
-      console.info('[Tracking live snapshot] MCP source filter start', { brand, projectId, projectName, dateFrom, dateTo, sourceFilter });
-      const sourceSample = await getFilteredProjectSources({
-        projectId,
-        dateFrom,
-        dateTo,
-        country: sourceFilter.country,
-        language: sourceFilter.language || 'en',
-      });
+    const sourceResult = filteredSourcePromise ? await filteredSourcePromise : null;
+    if (sourceResult?.sourceSample) {
+      const sourceSample = sourceResult.sourceSample;
       const sampleSummary = summarizeSourceSample({
         mentions: sourceSample.mentions,
         brand,
         project,
-        country: sourceSample.country,
-        language: sourceSample.language,
-      });
-      console.info('[Tracking live snapshot] MCP source filter done', {
-        brand,
-        projectId,
-        projectName,
-        records: sourceSample.recordCount,
         country: sourceSample.country,
         language: sourceSample.language,
       });
@@ -477,22 +503,15 @@ export async function getLiveSnapshot({ accountId, brand, aliases = [], projectI
           mcpSourceToolName: sourceSample.toolName,
         },
       };
-    } catch (error) {
-      console.warn('[Tracking live snapshot] MCP source filter unavailable', {
-        brand,
-        projectId,
-        projectName,
-        message: error.message,
-      });
-      return {
-        ...snapshot,
-        diagnostics: {
-          ...snapshot.diagnostics,
-          mcpSourceFilterApplied: false,
-          mcpSourceFilterError: error.message,
-        },
-      };
     }
+    return {
+      ...snapshot,
+      diagnostics: {
+        ...snapshot.diagnostics,
+        mcpSourceFilterApplied: false,
+        mcpSourceFilterError: sourceResult?.error?.message || 'MCP source filter was unavailable.',
+      },
+    };
   }
   return snapshot;
 }

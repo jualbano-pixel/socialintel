@@ -277,11 +277,12 @@ async function refreshKnownSetupProjectIds() {
     const netflixProject = exactProject(projects, 'Netflix');
     const netflixKrisProject = exactProject(projects, 'Netflix Kris Aquino');
     const current = [
-      netflixKrisProject && {
+      netflixProject && {
         primaryBrand: 'Netflix Philippines',
-        projectName: 'Netflix Kris Aquino',
-        projectId: String(projectListItemId(netflixKrisProject)),
-        philippinesOnly: true,
+        projectName: 'Netflix',
+        projectId: String(projectListItemId(netflixProject)),
+        philippinesOnly: false,
+        sourceFilter: { type: 'mcp', country: 'PH', language: 'en' },
       },
       netflixProject && {
         primaryBrand: 'Netflix',
@@ -289,6 +290,12 @@ async function refreshKnownSetupProjectIds() {
         projectId: String(projectListItemId(netflixProject)),
         philippinesOnly: false,
         sourceFilter: { type: 'mcp', country: 'PH', language: 'en' },
+      },
+      netflixKrisProject && {
+        primaryBrand: 'Netflix Kris Aquino',
+        projectName: 'Netflix Kris Aquino',
+        projectId: String(projectListItemId(netflixKrisProject)),
+        philippinesOnly: true,
       },
     ].filter(item => item.projectId);
     if (!current.length) return null;
@@ -366,11 +373,19 @@ function savedSetupForBrand(brand) {
   try {
     const setups = JSON.parse(window.localStorage.getItem('signalIntelSetups') || '[]');
     const exactBrand = String(brand || '').toLowerCase().trim();
+    const mentionsKrisAquino = exactBrand.includes('kris aquino');
     return setups.find(setup => String(setup.primaryBrand || '').toLowerCase().trim() === exactBrand)
       || setups.find(setup => {
         const primaryMonitor = (setup.monitors || []).find(monitor => monitor.role === 'primary');
         return String(primaryMonitor?.name || '').toLowerCase().trim() === exactBrand;
       })
+      || (mentionsKrisAquino ? setups.find(setup => {
+        const names = [
+          setup.primaryBrand,
+          ...(setup.monitors || []).map(monitor => monitor.name),
+        ].filter(Boolean);
+        return names.some(name => String(name || '').toLowerCase().includes('kris aquino'));
+      }) : null)
       || setups.find(setup => {
       const names = [
         setup.primaryBrand,

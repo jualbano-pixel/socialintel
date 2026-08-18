@@ -1,7 +1,7 @@
 import { getLiveSnapshot } from '../utils';
 import { Brand24RestError, toClientSafeError } from '../../../../lib/brand24-rest';
 
-const LIVE_SNAPSHOT_TIMEOUT_MS = 90000;
+const LIVE_SNAPSHOT_TIMEOUT_MS = 180000;
 export async function POST(request) {
   try {
     const body = await request.json();
