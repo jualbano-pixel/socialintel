@@ -3,6 +3,8 @@
 export async function POST(request) {
   try {
     const body = await request.json();
+    const brand24Token = process.env.BRAND24_TOKEN;
+    const hasBrand24Token = brand24Token && !brand24Token.startsWith('your_');
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
@@ -15,9 +17,8 @@ export async function POST(request) {
         ...body,
         tools: [
           {
-            type: 'mcp',
-            name: 'brand24',
-            server_name: 'brand24',
+            type: 'mcp_toolset',
+            mcp_server_name: 'brand24',
           },
         ],
         mcp_servers: [
@@ -25,7 +26,7 @@ export async function POST(request) {
             type: 'url',
             url: 'https://mcp.brand24.com/v1/mcp',
             name: 'brand24',
-            ...(process.env.BRAND24_TOKEN && { authorization_token: process.env.BRAND24_TOKEN }),
+            ...(hasBrand24Token && { authorization_token: brand24Token }),
           },
         ],
       }),

@@ -231,6 +231,87 @@ function monitorProjectId(monitor) {
   return monitor?.monitorId || monitor?.projectId || monitor?.id || '';
 }
 
+function projectListItemId(project) {
+  return project?.id || project?.project_id || project?.projectId || '';
+}
+
+function projectListItemName(project) {
+  return project?.name || project?.project_name || project?.projectName || '';
+}
+
+function exactProject(projects, name) {
+  const key = String(name || '').toLowerCase().trim();
+  return projects.find(project => projectListItemName(project).toLowerCase().trim() === key) || null;
+}
+
+function setupRecordForProject(primaryBrand, projectName, projectId, philippinesOnly = true, sourceFilter = null) {
+  const now = new Date().toISOString();
+  return {
+    id: `monitor-refresh-${primaryBrand.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Date.now()}`,
+    primaryBrand,
+    dateRange: { dateFrom: '2026-08-03', dateTo: '2026-08-17' },
+    philippinesOnly,
+    sourceFilter,
+    language: 'english',
+    accountId: '',
+    monitors: [{
+      role: 'primary',
+      name: projectName,
+      monitorId: projectId,
+      projectId,
+      sourceFilter,
+      status: 'refreshed',
+    }],
+    createdAt: now,
+    refreshedAt: now,
+  };
+}
+
+async function refreshKnownSetupProjectIds() {
+  if (typeof window === 'undefined') return null;
+  try {
+    const response = await fetch('/api/tracking/projects');
+    const data = await response.json();
+    if (!response.ok || data.error) throw new Error(data.error || `Project list failed with ${response.status}`);
+    const projects = Array.isArray(data.projects) ? data.projects : [];
+    const netflixProject = exactProject(projects, 'Netflix');
+    const netflixKrisProject = exactProject(projects, 'Netflix Kris Aquino');
+    const current = [
+      netflixKrisProject && {
+        primaryBrand: 'Netflix Philippines',
+        projectName: 'Netflix Kris Aquino',
+        projectId: String(projectListItemId(netflixKrisProject)),
+        philippinesOnly: true,
+      },
+      netflixProject && {
+        primaryBrand: 'Netflix',
+        projectName: 'Netflix',
+        projectId: String(projectListItemId(netflixProject)),
+        philippinesOnly: false,
+        sourceFilter: { type: 'mcp', country: 'PH', language: 'en' },
+      },
+    ].filter(item => item.projectId);
+    if (!current.length) return null;
+
+    const setups = JSON.parse(window.localStorage.getItem('signalIntelSetups') || '[]');
+    const staleIds = new Set(['1397619334', '1397619607']);
+    const currentIds = new Set(current.map(item => item.projectId));
+    const withoutStaleNetflix = setups.filter(setup => {
+      const names = [setup.primaryBrand, ...(setup.monitors || []).map(monitor => monitor.name)].join(' ').toLowerCase();
+      const ids = (setup.monitors || []).map(monitor => String(monitorProjectId(monitor)));
+      if (ids.some(id => staleIds.has(id))) return false;
+      if (ids.some(id => currentIds.has(id))) return false;
+      return !names.includes('netflix');
+    });
+    const refreshed = current.map(item => setupRecordForProject(item.primaryBrand, item.projectName, item.projectId, item.philippinesOnly, item.sourceFilter || null));
+    window.localStorage.setItem('signalIntelSetups', JSON.stringify([...refreshed, ...withoutStaleNetflix].slice(0, 20)));
+    return current;
+  } catch (error) {
+    console.warn('[Tracking setup] could not refresh known project ids', error.message);
+    return null;
+  }
+}
+
 function setupMonitorForBrand(setup, brand, role = '') {
   const monitors = Array.isArray(setup?.monitors) ? setup.monitors : [];
   const scoped = role ? monitors.filter(monitor => monitor.role === role) : monitors;
@@ -245,6 +326,7 @@ async function liveTrackingSnapshot(brand, startDate, endDate, monitor = null) {
   const setup = savedSetupForBrand(brand);
   const storedMonitor = monitor || setupMonitorForBrand(setup, brand);
   const storedProjectId = monitorProjectId(storedMonitor);
+  const sourceFilter = storedMonitor?.sourceFilter || setup?.sourceFilter || null;
   const response = await fetch('/api/tracking/live-snapshot', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -256,6 +338,7 @@ async function liveTrackingSnapshot(brand, startDate, endDate, monitor = null) {
       dateFrom: startDate,
       dateTo: endDate,
       philippinesOnly: setup?.philippinesOnly === true,
+      sourceFilter,
     }),
   });
   const data = await response.json();
@@ -282,7 +365,13 @@ function savedSetupForBrand(brand) {
   if (typeof window === 'undefined') return null;
   try {
     const setups = JSON.parse(window.localStorage.getItem('signalIntelSetups') || '[]');
-    return setups.find(setup => {
+    const exactBrand = String(brand || '').toLowerCase().trim();
+    return setups.find(setup => String(setup.primaryBrand || '').toLowerCase().trim() === exactBrand)
+      || setups.find(setup => {
+        const primaryMonitor = (setup.monitors || []).find(monitor => monitor.role === 'primary');
+        return String(primaryMonitor?.name || '').toLowerCase().trim() === exactBrand;
+      })
+      || setups.find(setup => {
       const names = [
         setup.primaryBrand,
         ...(setup.monitors || []).map(monitor => monitor.name),
@@ -387,6 +476,7 @@ function trackerAgent(d) {
       neutral: { count: neu, pct: overridePct(d.neutralPct, parseFloat((neu/totS*100).toFixed(1))) },
     },
     dailyStats: d.dailyStats || [], found: d.found, projectName: d.projectName,
+    diagnostics: d.diagnostics || {},
     mentionSampleCapped: !!d.diagnostics?.mentionSampleCapped,
     mentionSampleLimit: d.diagnostics?.mentionSampleLimit,
     manualVerified: !!d.manualVerified,
@@ -954,6 +1044,7 @@ function socialListeningSnapshot(brand, metrics, demoMode) {
   const socialReach = Number(metrics.socialMediaReach) || Math.round(reach * 0.76);
   const nonSocialReach = Number(metrics.nonSocialMediaReach) || Math.max(reach - socialReach, 0);
   const isManual = !!metrics.manualVerified;
+  const mcpSourceFiltered = !!metrics.diagnostics?.mcpSourceFilterApplied;
   const sourcePalette = ['var(--chart-blue)', 'var(--chart-pink)', 'var(--chart-red)', 'var(--chart-rose)', 'var(--chart-teal)', 'var(--chart-purple)', 'var(--chart-gold)', 'var(--chart-cyan)'];
   const sourceCategories = metrics.sourceCategories?.length
     ? metrics.sourceCategories.map((s, i) => ({
@@ -977,7 +1068,7 @@ function socialListeningSnapshot(brand, metrics, demoMode) {
     sentiment: [],
     overview: [
       { label: 'Total mentions', value: fmt(total), change: isManual ? 'Manual' : 'Live', tone: 'live' },
-      { label: 'Total reach', value: fmt(reach), change: isManual ? 'Manual' : 'Live', tone: 'live' },
+      { label: 'Total reach', value: fmt(reach), change: mcpSourceFiltered ? 'Full project' : isManual ? 'Manual' : 'Live', tone: 'live' },
       { label: 'Positive mentions', value: fmt(positive), change: `${metrics.sentiment.positive.pct}%`, tone: 'up' },
       { label: 'Negative mentions', value: fmt(negative), change: `${metrics.sentiment.negative.pct}%`, tone: 'down' },
       { label: 'Average Presence Score', value: metrics.averagePresenceScore || `${Math.min(100, Math.max(1, Math.round((Math.log10(total + 1) * 11) + (metrics.sentiment.positive.pct / 3))))}/100`, change: metrics.averagePresenceScore ? (isManual ? 'Manual' : 'Live') : 'Est.', tone: 'live' },
@@ -995,6 +1086,9 @@ function socialListeningSnapshot(brand, metrics, demoMode) {
     mentions: topMentions,
     sources: sourceCategories,
     sourceNarrative: metrics.sourceNarrative || '',
+    sourceSampleNote: mcpSourceFiltered
+      ? `${metrics.diagnostics.mcpSourceFilterCountry || 'PH'}-filtered source and mention sample from MCP top authors; capped at ${metrics.diagnostics.mcpSourceSampleLimit || 100} visible records. Reach remains unfiltered full-project reach.`
+      : '',
     sentiment: [
       { name: 'Neutral', pct: pct(neutral, positive + negative + neutral), color: 'var(--chart-neutral)' },
       { name: 'Positive', pct: pct(positive, positive + negative + neutral), color: 'var(--accent-positive)' },
@@ -1121,6 +1215,7 @@ function SocialListeningReport({ brand, metrics, demoMode }) {
       <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(320px, 1fr))', gap:12, alignItems:'start', marginBottom:12 }}>
         <div>
           <h2 style={{ fontSize:20, margin:'0 0 8px', fontWeight:800 }}>Top Mentions</h2>
+          {social.sourceSampleNote && <p style={{ color:'var(--accent-highlight)', fontSize:11, lineHeight:1.55, margin:'0 0 8px' }}>{social.sourceSampleNote}</p>}
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(280px, 1fr))', gap:8 }}>
             {social.mentions.length
               ? social.mentions.map((mention, i) => <MentionCard key={i} mention={mention}/>)
@@ -1139,6 +1234,7 @@ function SocialListeningReport({ brand, metrics, demoMode }) {
           <h2 style={{ fontSize:20, margin:'0 0 12px', fontWeight:800 }}>Sources Share</h2>
           <div style={{ color:'var(--text-primary)', fontSize:15, fontWeight:800, marginBottom:6 }}>{topSource ? `${topSource.name} leads source share` : 'Source mix unavailable'}</div>
           <p style={{ color:'var(--text-muted)', fontSize:12, margin:'0 0 18px' }}>{sourceNarrative}</p>
+          {social.sourceSampleNote && <p style={{ color:'var(--accent-highlight)', fontSize:11, lineHeight:1.55, margin:'-8px 0 16px' }}>{social.sourceSampleNote}</p>}
           {social.sources?.length ? <DonutChart data={social.sources}/> : <p style={{ color:'var(--text-muted)', fontSize:12, lineHeight:1.65 }}>No source category breakdown was extracted from this export.</p>}
         </div>
         <div style={{ ...CARD, minHeight:270 }}>
@@ -1422,18 +1518,25 @@ export default function SignalIntel() {
   const [manualData, setManualData] = useState(null);
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const prefilledBrand = params.get('brand')?.trim();
-    if (!prefilledBrand) return;
-    setBrand(prefilledBrand);
-    const setup = savedSetupForBrand(prefilledBrand);
-    const setupCompetitors = (setup?.monitors || [])
-      .filter(monitor => monitor.role !== 'primary' && monitor.name)
-      .map(monitor => monitor.name);
-    if (setupCompetitors.length) setComp(setupCompetitors);
-    if (setup?.dateRange?.dateFrom && setup?.dateRange?.dateTo) {
-      setPeriod(`${setup.dateRange.dateFrom} to ${setup.dateRange.dateTo}`);
+    let cancelled = false;
+    async function applyPrefill() {
+      const params = new URLSearchParams(window.location.search);
+      const prefilledBrand = params.get('brand')?.trim();
+      if (!prefilledBrand) return;
+      await refreshKnownSetupProjectIds();
+      if (cancelled) return;
+      setBrand(prefilledBrand);
+      const setup = savedSetupForBrand(prefilledBrand);
+      const setupCompetitors = (setup?.monitors || [])
+        .filter(monitor => monitor.role !== 'primary' && monitor.name)
+        .map(monitor => monitor.name);
+      if (setupCompetitors.length) setComp(setupCompetitors);
+      if (setup?.dateRange?.dateFrom && setup?.dateRange?.dateTo) {
+        setPeriod(`${setup.dateRange.dateFrom} to ${setup.dateRange.dateTo}`);
+      }
     }
+    applyPrefill();
+    return () => { cancelled = true; };
   }, []);
 
   const sa = (k, v) => setAgents(p => ({ ...p, [k]: v }));

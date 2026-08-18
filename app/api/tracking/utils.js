@@ -1,4 +1,5 @@
 import { listProjects, getMentions, getMentionsReach } from '../../../lib/brand24-rest';
+import { getFilteredProjectSources } from '../../../lib/brand24-mcp';
 
 const SOURCE_COLORS = ['#2f86de', '#dc37a5', '#e74c3c', '#f78fb3', '#33b6b4', '#7155d9', '#f4d03f', '#7ed6df'];
 const SOCIAL_CATEGORIES = new Set(['facebook', 'instagram', 'tiktok', 'twitter', 'x', 'youtube', 'reddit', 'socialmedia']);
@@ -64,7 +65,7 @@ function fieldNumber(item, fields) {
 }
 
 function sourceLabel(mention) {
-  const raw = mention?.category || mention?.source || mention?.domain || mention?.media_type || mention?.platform || 'web';
+  const raw = mention?.category || mention?.source || mention?.domain || mention?.media_type || mention?.platform || mention?.host?.name || 'web';
   const normalized = String(raw).toLowerCase();
   if (normalized.includes('facebook')) return 'Facebook';
   if (normalized.includes('instagram')) return 'Instagram';
@@ -88,7 +89,7 @@ function sentimentLabel(value) {
 }
 
 function mentionDate(mention) {
-  const raw = mention?.date || mention?.published_at || mention?.publishedAt || mention?.created_at || mention?.createdAt;
+  const raw = mention?.date || mention?.published_at || mention?.publishedAt || mention?.created_at || mention?.createdAt || mention?.createdDate;
   if (!raw) return '';
   const date = new Date(raw);
   return Number.isNaN(date.getTime()) ? String(raw).slice(0, 10) : date.toISOString().slice(0, 10);
@@ -245,7 +246,59 @@ export function summarizeMentions({ brand, project, mentions, reach, dateFrom, d
   };
 }
 
-export async function getLiveSnapshot({ accountId, brand, aliases = [], projectId: storedProjectId = '', projectName: storedProjectName = '', dateFrom, dateTo, filters = {}, countryFilter = '' }) {
+function summarizeSourceSample({ mentions, brand, project, country, language }) {
+  const sourceCounts = new Map();
+  mentions.forEach(mention => {
+    const label = sourceLabel(mention);
+    sourceCounts.set(label, (sourceCounts.get(label) || 0) + 1);
+  });
+  const sourceCategories = [...sourceCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 10)
+    .map(([name, count], index) => ({
+      name,
+      count,
+      pct: Number(((count / Math.max(mentions.length, 1)) * 100).toFixed(1)),
+      color: SOURCE_COLORS[index % SOURCE_COLORS.length],
+    }));
+  const topMentions = [...mentions]
+    .sort((a, b) => fieldNumber(b, ['viewsCount', 'followersCount', 'reach', 'estimated_reach', 'estimatedReach', 'engagement', 'interactions']) - fieldNumber(a, ['viewsCount', 'followersCount', 'reach', 'estimated_reach', 'estimatedReach', 'engagement', 'interactions']))
+    .slice(0, 6)
+    .map((mention, index) => {
+      const source = sourceLabel(mention);
+      const reach = fieldNumber(mention, ['viewsCount', 'followersCount', 'reach', 'estimated_reach', 'estimatedReach', 'engagement', 'interactions']);
+      return {
+        source,
+        title: String(mention.title || mention.author?.name || mention.url || `${source} mention`).slice(0, 140),
+        meta: [reach ? `${reach.toLocaleString()} visible reach` : '', mentionDate(mention), mention.country ? `Country ${mention.country}` : ''].filter(Boolean).join(' · '),
+        sentiment: sentimentLabel(mention.sentiment),
+        text: String(mention.content || mention.text || mention.description || mention.snippet || mention.title || '').replace(/<[^>]+>/g, '').slice(0, 260),
+        icon: source.slice(0, 2).toUpperCase(),
+        color: SOURCE_COLORS[index % SOURCE_COLORS.length],
+        url: mention.url || mention.link || '',
+      };
+    });
+  const topSource = sourceCategories[0];
+  return {
+    sourceCategories,
+    topMentions,
+    sourceNarrative: topSource
+      ? `${topSource.name} leads the ${country}-filtered source sample at ${topSource.pct}% of visible mentions. Reach remains the full project reach because filtered reach is not exposed.`
+      : `No ${country}-filtered source sample was available for ${brand}.`,
+    diagnostics: {
+      mcpSourceFilterApplied: true,
+      mcpSourceFilterCountry: country,
+      mcpSourceFilterLanguage: language,
+      mcpSourceSampleRecords: mentions.length,
+      mcpSourceSampleLimit: 100,
+      mcpSourceSampleLimited: true,
+      mcpSourceProjectName: itemName(project),
+      mcpReachFiltered: false,
+    },
+  };
+}
+
+export async function getLiveSnapshot({ accountId, brand, aliases = [], projectId: storedProjectId = '', projectName: storedProjectName = '', dateFrom, dateTo, filters = {}, countryFilter = '', sourceFilter = null }) {
   const knownProjectId = String(storedProjectId || '').trim();
   let projects = [];
   let project = knownProjectId
@@ -373,7 +426,7 @@ export async function getLiveSnapshot({ accountId, brand, aliases = [], projectI
     nonSocialMediaReach: reach.nonSocialMediaReachTotal,
     countryFilter,
   });
-  return summarizeMentions({
+  const snapshot = summarizeMentions({
     brand,
     project,
     mentions,
@@ -388,4 +441,58 @@ export async function getLiveSnapshot({ accountId, brand, aliases = [], projectI
       hasMore: mentionsResult.hasMore,
     },
   });
+  if (sourceFilter?.type === 'mcp' && sourceFilter.country) {
+    try {
+      console.info('[Tracking live snapshot] MCP source filter start', { brand, projectId, projectName, dateFrom, dateTo, sourceFilter });
+      const sourceSample = await getFilteredProjectSources({
+        projectId,
+        dateFrom,
+        dateTo,
+        country: sourceFilter.country,
+        language: sourceFilter.language || 'en',
+      });
+      const sampleSummary = summarizeSourceSample({
+        mentions: sourceSample.mentions,
+        brand,
+        project,
+        country: sourceSample.country,
+        language: sourceSample.language,
+      });
+      console.info('[Tracking live snapshot] MCP source filter done', {
+        brand,
+        projectId,
+        projectName,
+        records: sourceSample.recordCount,
+        country: sourceSample.country,
+        language: sourceSample.language,
+      });
+      return {
+        ...snapshot,
+        sourceCategories: sampleSummary.sourceCategories,
+        topMentions: sampleSummary.topMentions,
+        sourceNarrative: sampleSummary.sourceNarrative,
+        diagnostics: {
+          ...snapshot.diagnostics,
+          ...sampleSummary.diagnostics,
+          mcpSourceToolName: sourceSample.toolName,
+        },
+      };
+    } catch (error) {
+      console.warn('[Tracking live snapshot] MCP source filter unavailable', {
+        brand,
+        projectId,
+        projectName,
+        message: error.message,
+      });
+      return {
+        ...snapshot,
+        diagnostics: {
+          ...snapshot.diagnostics,
+          mcpSourceFilterApplied: false,
+          mcpSourceFilterError: error.message,
+        },
+      };
+    }
+  }
+  return snapshot;
 }

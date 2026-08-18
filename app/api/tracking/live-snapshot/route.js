@@ -38,6 +38,7 @@ export async function POST(request) {
         dateFrom: body.dateFrom,
         dateTo: body.dateTo,
         countryFilter: body.philippinesOnly ? 'PH' : '',
+        sourceFilter: body.sourceFilter,
         filters: {
           sentiment: body.sentiment,
           category: body.category,
