@@ -1,5 +1,5 @@
 'use client';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import ThemeToggle from './theme-toggle';
 
 const LIME = 'var(--accent-live)';
@@ -1336,6 +1336,12 @@ export default function SignalIntel() {
   const [uploadStatus, setUploadStatus] = useState('');
   const [manualData, setManualData] = useState(null);
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const prefilledBrand = params.get('brand')?.trim();
+    if (prefilledBrand) setBrand(prefilledBrand);
+  }, []);
+
   const sa = (k, v) => setAgents(p => ({ ...p, [k]: v }));
   const so = (k, v) => setOut(p => ({ ...p, [k]: v }));
   const addC = () => { if (newC.trim() && competitors.length < 7) { setComp(p => [...p, newC.trim()]); setNewC(''); } };
@@ -1693,7 +1699,7 @@ Return a concise intelligence summary, recurring themes, specific public posts o
               </div>
           <div style={{ display:'flex', gap:8, flexWrap:'wrap', justifyContent:'flex-end' }}>
             <ThemeToggle />
-            <a href="/setup" style={{ background:'var(--bg-surface-muted)', border:`1px solid var(--accent-live-border)`, borderRadius:6, padding:'7px 12px', color:LIME, fontSize:11, textDecoration:'none', whiteSpace:'nowrap' }}>Create Source →</a>
+            <a href="/setup" style={{ background:'var(--bg-surface-muted)', border:`1px solid var(--accent-live-border)`, borderRadius:6, padding:'7px 12px', color:LIME, fontSize:11, textDecoration:'none', whiteSpace:'nowrap' }}>Manage tracking sources</a>
           </div>
             </div>
             <div style={{ display:'flex', flexDirection:'column', gap:5 }}>
@@ -1944,7 +1950,7 @@ Return a concise intelligence summary, recurring themes, specific public posts o
           {competitive.sovData?.some(s => !s.found) && (
             <div style={{ marginTop:12, padding:'10px 14px', background:'var(--bg-surface-muted)', borderRadius:6, border:'1px solid var(--border)' }}>
               <p style={{ color:'var(--text-faint)', fontSize:11, fontFamily:"'JetBrains Mono',monospace", margin:0 }}>
-                // Missing brands need tracking sources → <a href="/setup" style={{ color:LIME, textDecoration:'none' }}>Create source</a>
+                // Missing brands need tracking sources → <a href="/setup" style={{ color:LIME, textDecoration:'none' }}>+ Add tracking source</a>
               </p>
             </div>
           )}

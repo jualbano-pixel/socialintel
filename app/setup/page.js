@@ -200,8 +200,13 @@ export default function SetupPage() {
         {error && <div style={{ marginTop: 14, background: 'var(--bg-panel-negative)', border: '1px solid var(--accent-negative-border)', color: 'var(--accent-negative)', borderRadius: 8, padding: 12, fontSize: 13 }}>{error}</div>}
         {result && (
           <div style={{ marginTop: 14, background: 'var(--bg-panel-positive)', border: `1px solid var(--accent-live-border)`, borderRadius: 8, padding: 16 }}>
-            <div style={{ color: LIME, fontSize: 10, letterSpacing: '0.16em', textTransform: 'uppercase', fontFamily: "'JetBrains Mono',monospace", marginBottom: 8 }}>Setup Created</div>
-            <div style={{ color: 'var(--text-secondary)', fontSize: 14, marginBottom: 10 }}>{result.monitors.length} linked monitor{result.monitors.length === 1 ? '' : 's'} are ready for Signal Intel.</div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap', marginBottom: 10 }}>
+              <div>
+                <div style={{ color: LIME, fontSize: 10, letterSpacing: '0.16em', textTransform: 'uppercase', fontFamily: "'JetBrains Mono',monospace", marginBottom: 8 }}>Setup Created</div>
+                <div style={{ color: 'var(--text-secondary)', fontSize: 14 }}>{result.monitors.length} linked monitor{result.monitors.length === 1 ? '' : 's'} are ready for Signal Intel.</div>
+              </div>
+              <a href={`/?brand=${encodeURIComponent(result.primaryBrand || '')}`} style={{ background: LIME, color: 'var(--text-inverse)', border: 'none', borderRadius: 6, padding: '10px 14px', textDecoration: 'none', fontSize: 12, fontWeight: 900, whiteSpace: 'nowrap' }}>Run Report</a>
+            </div>
             <div style={{ display: 'grid', gap: 7 }}>
               {result.monitors.map(item => (
                 <div key={`${item.role}-${item.name}`} style={{ display: 'flex', justifyContent: 'space-between', gap: 12, background: 'var(--bg-surface-subtle)', border: '1px solid var(--border)', borderRadius: 6, padding: '9px 10px', fontSize: 12 }}>
