@@ -346,9 +346,7 @@ export async function getLiveSnapshot({ accountId, brand, aliases = [], projectI
   const projectName = itemName(project);
   let mentionsResult;
   let reach;
-  const mentionSampleLimit = sourceFilter?.type === 'mcp' && sourceFilter.country
-    ? 1000
-    : LIVE_MENTION_SAMPLE_LIMIT;
+  const mentionSampleLimit = LIVE_MENTION_SAMPLE_LIMIT;
   const filteredSourcePromise = sourceFilter?.type === 'mcp' && sourceFilter.country
     ? (async () => {
       try {
