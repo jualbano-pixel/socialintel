@@ -1,6 +1,7 @@
 'use client';
 import { useEffect, useRef, useState } from 'react';
 import ThemeToggle from './theme-toggle';
+import { parsePeriod } from '../lib/report-period.mjs';
 
 const LIME = 'var(--accent-live)';
 const CLAUDE_MODEL = 'claude-sonnet-4-6';
@@ -162,36 +163,6 @@ function parseGrokText(data) {
     ?? data?.output?.find?.(b => b.type === 'message')?.content?.[0]?.text
     ?? data?.output?.find?.(b => b.content?.[0]?.text)?.content?.[0]?.text
     ?? null;
-}
-
-// ── Date parser ───────────────────────────────────────────────
-function parsePeriod(period) {
-  try {
-    const isoRange = String(period || '').match(/(\d{4}-\d{2}-\d{2})\s*(?:to|through|–|-)\s*(\d{4}-\d{2}-\d{2})/i);
-    if (isoRange) return { startDate: isoRange[1], endDate: isoRange[2] };
-    const months = { january:'01',february:'02',march:'03',april:'04',may:'05',june:'06',july:'07',august:'08',september:'09',october:'10',november:'11',december:'12' };
-    const clean = period.toLowerCase().replace(/[–—]/g, '-').replace(/\s+/g, ' ').trim();
-    const crossMonth = clean.match(/([a-z]+)\s+(\d{1,2})\s*-\s*([a-z]+)\s+(\d{1,2}),?\s*(\d{4})/);
-    if (crossMonth) {
-      const [, startMonth, startDay, endMonth, endDay, year] = crossMonth;
-      return {
-        startDate: `${year}-${months[startMonth] ?? '01'}-${startDay.padStart(2,'0')}`,
-        endDate: `${year}-${months[endMonth] ?? '01'}-${endDay.padStart(2,'0')}`,
-      };
-    }
-    const sameMonth = clean.match(/([a-z]+)\s+(\d{1,2})\s*-\s*(\d{1,2}),?\s*(\d{4})/);
-    if (sameMonth) {
-      const [, monthName, startDay, endDay, year] = sameMonth;
-      const month = months[monthName] ?? '01';
-      return {
-        startDate: `${year}-${month}-${startDay.padStart(2,'0')}`,
-        endDate: `${year}-${month}-${endDay.padStart(2,'0')}`,
-      };
-    }
-  } catch {}
-  const now = new Date(), month = new Date(now - 30*24*60*60*1000);
-  const f = d => d.toISOString().split('T')[0];
-  return { startDate: f(month), endDate: f(now) };
 }
 
 // ── API helpers ───────────────────────────────────────────────
