@@ -1863,6 +1863,50 @@ Return a concise intelligence summary, recurring themes, specific public posts o
     }
   };
 
+  const downloadEastWestProductionPdf = async () => {
+    if (!report || pdfLoading) return;
+    setPdfLoading(true);
+    setPdfError('');
+    try {
+      const { startDate, endDate } = parsePeriod(period);
+      const title = `EastWest Production Preview ${startDate} to ${endDate}`;
+      const response = await fetch('/api/eastwest-reference-pdf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title,
+          reportInput: {
+            brand,
+            periodLabel: period,
+            startDate,
+            endDate,
+            ...out,
+            generatedAt: new Date().toISOString(),
+          },
+        }),
+      });
+      const contentType = response.headers.get('content-type') || '';
+      if (!response.ok) {
+        const data = contentType.includes('application/json') ? await response.json() : { error: await response.text() };
+        throw new Error(data.error || `EastWest PDF export failed with ${response.status}`);
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error('[EastWest Production PDF] error', e);
+      setPdfError(e.message);
+    } finally {
+      setPdfLoading(false);
+    }
+  };
+
   // ── SETUP SCREEN ────────────────────────────────────────────
   if (step === 'setup') return (
     <div style={{ minHeight:'100vh', padding:'38px 22px' }}>
@@ -2062,6 +2106,7 @@ Return a concise intelligence summary, recurring themes, specific public posts o
           <div style={{ display:'flex', flexDirection:'column', alignItems:'flex-end', gap:8 }}>
             <div data-pdf-hidden="true" style={{ display:'flex', gap:8, flexWrap:'wrap', justifyContent:'flex-end' }}>
               <button type="button" data-testid="download-pdf" onClick={downloadPdf} disabled={pdfLoading} style={{ background:pdfLoading?'var(--bg-surface-muted)':'var(--accent-info)', border:'1px solid var(--accent-info-border)', borderRadius:6, padding:'9px 14px', color:'var(--text-on-accent)', cursor:pdfLoading?'default':'pointer', fontSize:12, fontWeight:800 }}>{pdfLoading?'Exporting...':'Download PDF'}</button>
+              <button type="button" data-testid="download-eastwest-production-pdf" onClick={downloadEastWestProductionPdf} disabled={pdfLoading} style={{ background:pdfLoading?'var(--bg-surface-muted)':LIME, border:'1px solid var(--accent-live-border)', borderRadius:6, padding:'9px 14px', color:'var(--text-inverse)', cursor:pdfLoading?'default':'pointer', fontSize:12, fontWeight:800 }}>{pdfLoading?'Exporting...':'EastWest Production PDF'}</button>
               <button type="button" data-testid="ask-ai-header" onClick={() => setAiOpen(true)} style={{ background:LIME, border:'1px solid var(--text-inverse)', borderRadius:6, padding:'9px 14px', color:'var(--text-inverse)', cursor:'pointer', fontSize:12, fontWeight:800 }}>Ask AI</button>
               <ThemeToggle />
               <button onClick={() => setStep('setup')} style={{ background:'var(--bg-surface)', border:'1px solid var(--bg-surface-muted)', borderRadius:6, padding:'9px 14px', color:'var(--text-muted)', cursor:'pointer', fontSize:12 }}>← New Report</button>
