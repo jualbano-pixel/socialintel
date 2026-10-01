@@ -1929,6 +1929,7 @@ Return a concise intelligence summary, recurring themes, specific public posts o
               </div>
           <div style={{ display:'flex', gap:8, flexWrap:'wrap', justifyContent:'flex-end' }}>
             <ThemeToggle />
+            <a href="/topical-scan" style={{ background:'var(--bg-surface-muted)', border:`1px solid var(--accent-live-border)`, borderRadius:6, padding:'7px 12px', color:LIME, fontSize:11, textDecoration:'none', whiteSpace:'nowrap' }}>Topical Scan</a>
             <a href="/setup" style={{ background:'var(--bg-surface-muted)', border:`1px solid var(--accent-live-border)`, borderRadius:6, padding:'7px 12px', color:LIME, fontSize:11, textDecoration:'none', whiteSpace:'nowrap' }}>Manage tracking sources</a>
           </div>
             </div>
