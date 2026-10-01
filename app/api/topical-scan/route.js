@@ -1,7 +1,7 @@
 import { getMentions, getMentionsCount, getMentionsReach, toClientSafeError } from '../../../lib/brand24-rest';
 import { claudeProviderMetadata, requestClaude } from '../../../lib/claude-api';
 import { requestOpenRouterChat } from '../../../lib/openrouter-api';
-import { requestGrokSearch } from '../../../lib/grok-api';
+import { extractOpenRouterAnnotationUrls, requestGrokSearch } from '../../../lib/grok-api';
 import { calendarMonthWindows, cleanList, extractJson, filterMentionsToManilaRange, flagMentions, sanitizeDirectionalFindings, summarizeClassifications, validateTopicalScanInput } from '../../../lib/topical-scan';
 
 export const maxDuration = 300;
@@ -45,25 +45,93 @@ function directionalPrompt(input, theme, sourceLine, limit = null) {
   return `Search ${sourceLine} for public posts from the Philippines, ${input.dateFrom}–${input.dateTo}, about ${projectName} (${cleanList(input.aliases).join(', ') || 'brand name'}) related to: ${theme.description}. Relevant phrases: ${cleanList(theme.phrases).join(', ')}. Return ONLY a JSON array of objects with url, platform, date, paraphrase, and stance.${limit ? ` Return no more than ${limit} posts.` : ''} Include only posts explicitly about ${projectName}; each paraphrase must be exactly one sentence, must explicitly name ${projectName}, and must describe that specific cited post. Omit usernames, personal names, handles, account details, and personal amounts. Every object must have a working source URL and a non-empty paraphrase. If nothing qualifies, return []. Do not substitute generic content.`;
 }
 
+function normalizedUrl(value) {
+  try {
+    const url = new URL(String(value || '').trim());
+    if (!['http:', 'https:'].includes(url.protocol)) return '';
+    const host = url.hostname.toLocaleLowerCase();
+    if (host === 'localhost' || host === '0.0.0.0' || host === '::1' || /^127\./.test(host) || /^10\./.test(host) || /^192\.168\./.test(host) || /^169\.254\./.test(host) || /^172\.(1[6-9]|2\d|3[01])\./.test(host)) return '';
+    url.hash = '';
+    return url.toString().replace(/\/$/, '');
+  } catch { return ''; }
+}
+
+function xPostDate(url) {
+  const match = url.match(/\/status\/(\d+)/);
+  if (!match) return '';
+  try { return new Date(Number((BigInt(match[1]) >> 22n) + 1288834974657n)).toISOString().slice(0, 10); } catch { return ''; }
+}
+
+async function validateCitationUrl(url) {
+  const normalized = normalizedUrl(url);
+  if (!normalized) return null;
+  const parsed = new URL(normalized);
+  const isReddit = /(^|\.)reddit\.com$/i.test(parsed.hostname);
+  const redditJsonUrl = new URL(normalized);
+  if (isReddit) redditJsonUrl.pathname = `${redditJsonUrl.pathname.replace(/\/$/, '')}.json`;
+  const validationUrl = isReddit ? redditJsonUrl.toString() : normalized;
+  try {
+    const response = await fetch(validationUrl, {
+      redirect: 'follow',
+      signal: AbortSignal.timeout(10000),
+      headers: { 'User-Agent': 'SignalIntelCitationValidator/1.0', Accept: isReddit ? 'application/json' : 'text/html,application/xhtml+xml,application/json' },
+    });
+    if (!response.ok) return null;
+    if (isReddit) {
+      const data = await response.json();
+      const created = data?.[0]?.data?.children?.[0]?.data?.created_utc;
+      if (!Number.isFinite(Number(created))) return null;
+      return { url: normalized, date: new Date(Number(created) * 1000).toISOString().slice(0, 10) };
+    }
+    const xDate = /(^|\.)(x\.com|twitter\.com)$/i.test(parsed.hostname) ? xPostDate(normalized) : '';
+    if (xDate) return { url: normalized, date: xDate };
+    const html = await response.text();
+    const dateMatch = html.match(/<meta[^>]+(?:property|name)=["'](?:article:published_time|datePublished|datepublished|publish-date|publication_date)["'][^>]+content=["']([^"']+)["']/i)
+      || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:article:published_time|datePublished|datepublished|publish-date|publication_date)["']/i)
+      || html.match(/["']datePublished["']\s*:\s*["']([^"']+)["']/i)
+      || html.match(/<time[^>]+datetime=["']([^"']+)["']/i);
+    const date = dateMatch?.[1] ? new Date(dateMatch[1]) : null;
+    if (!date || Number.isNaN(date.valueOf())) return null;
+    return { url: normalized, date: date.toISOString().slice(0, 10) };
+  } catch { return null; }
+}
+
+async function metadataValidatedFindings({ parsed, citationUrls, input, limit = Infinity, requireBrand = false, platform = null }) {
+  const metadataUrls = new Map(citationUrls.map(url => [normalizedUrl(url), normalizedUrl(url)]).filter(([url]) => url));
+  const brandTerms = [input.projectName, ...cleanList(input.aliases)].map(term => String(term || '').trim().toLocaleLowerCase()).filter(term => term.length >= 3);
+  const candidates = [];
+  const seen = new Set();
+  for (const finding of Array.isArray(parsed) ? parsed : []) {
+    const hint = normalizedUrl(finding?.url);
+    const citationUrl = metadataUrls.get(hint);
+    const paraphrase = String(finding?.paraphrase || '').replace(/\s+/g, ' ').trim();
+    if (!citationUrl || !paraphrase || seen.has(citationUrl)) continue;
+    if (requireBrand && !brandTerms.some(term => paraphrase.toLocaleLowerCase().includes(term))) continue;
+    seen.add(citationUrl);
+    candidates.push({ ...finding, url: citationUrl, paraphrase, ...(platform ? { platform } : {}) });
+    if (candidates.length >= limit) break;
+  }
+  const checked = await Promise.all(candidates.map(async finding => {
+    const validated = await validateCitationUrl(finding.url);
+    if (!validated || validated.date < input.dateFrom || validated.date > input.dateTo) return null;
+    return { ...finding, url: validated.url, date: validated.date };
+  }));
+  const accepted = checked.filter(Boolean);
+  const sanitized = sanitizeDirectionalFindings(accepted);
+  return { ...sanitized, discarded: sanitized.discarded + Math.max(0, (Array.isArray(parsed) ? parsed.length : 0) - accepted.length) };
+}
+
+function geminiGroundingUrls(data) {
+  return (data?.candidates || []).flatMap(candidate => candidate?.groundingMetadata?.groundingChunks || [])
+    .map(chunk => chunk?.web?.uri).filter(uri => typeof uri === 'string');
+}
+
 async function pullGrok(input, theme) {
   try {
     const result = await requestGrokSearch({ input: directionalPrompt(input, theme, 'X/Twitter; include the x.com URL for every returned post', 5) });
     const parsed = extractJson(result.text, []);
-    const citedXUrls = new Set(result.sourceUrls.filter(url => /^https?:\/\/(?:www\.)?(?:x\.com|twitter\.com)\//i.test(url)).map(url => url.replace(/\/$/, '')));
-    const brandTerms = [input.projectName, ...cleanList(input.aliases)].map(term => String(term || '').trim().toLocaleLowerCase()).filter(term => term.length >= 3);
-    const seen = new Set();
-    const findings = (Array.isArray(parsed) ? parsed : []).filter(finding => {
-      const url = String(finding?.url || '').trim().replace(/\/$/, '');
-      const paraphrase = String(finding?.paraphrase || '').replace(/\s+/g, ' ').trim();
-      if (!url || !paraphrase || !citedXUrls.has(url) || seen.has(url)) return false;
-      if (!brandTerms.some(term => paraphrase.toLocaleLowerCase().includes(term))) return false;
-      seen.add(url);
-      finding.url = url;
-      finding.platform = 'X';
-      finding.paraphrase = paraphrase;
-      return true;
-    }).slice(0, 5);
-    return { source: 'Grok via OpenRouter', status: 'complete', ...sanitizeDirectionalFindings(findings) };
+    const findings = await metadataValidatedFindings({ parsed, citationUrls: result.sourceUrls, input, limit: 5, requireBrand: true, platform: 'X' });
+    return { source: 'Grok via OpenRouter', status: 'complete', ...findings };
   } catch (error) {
     if (error.message === 'Grok unavailable this run') return { source: 'Grok via OpenRouter', status: 'Grok unavailable this run', findings: [], discarded: 0 };
     throw error;
@@ -79,13 +147,15 @@ async function pullGemini(input, theme) {
   const data = await readJson(response);
   if (!response.ok) throw new Error(data?.error?.message || `Gemini failed (${response.status}).`);
   const text = data?.candidates?.[0]?.content?.parts?.map(part => part.text || '').join('') || '';
-  return { source: 'Gemini', status: 'complete', ...sanitizeDirectionalFindings(extractJson(text, [])) };
+  const findings = await metadataValidatedFindings({ parsed: extractJson(text, []), citationUrls: geminiGroundingUrls(data), input });
+  return { source: 'Gemini', status: 'complete', ...findings };
 }
 
 async function pullSonar(input, theme) {
   const source = 'Sonar via OpenRouter';
   const data = await requestOpenRouterChat({ model: 'perplexity/sonar-pro', messages: [{ role: 'user', content: directionalPrompt(input, theme, 'the public web and social sources') }] });
-  return { source, status: 'complete', ...sanitizeDirectionalFindings(extractJson(data?.choices?.[0]?.message?.content, [])) };
+  const findings = await metadataValidatedFindings({ parsed: extractJson(data?.choices?.[0]?.message?.content, []), citationUrls: extractOpenRouterAnnotationUrls(data), input });
+  return { source, status: 'complete', ...findings };
 }
 
 async function pool(tasks, concurrency = 2, onProgress = () => {}) {
