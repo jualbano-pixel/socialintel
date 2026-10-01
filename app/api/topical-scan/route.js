@@ -1,9 +1,9 @@
-import { getMentions, getMentionsReach, toClientSafeError } from '../../../lib/brand24-rest';
+import { getMentions, getMentionsCount, getMentionsReach, toClientSafeError } from '../../../lib/brand24-rest';
 import { claudeProviderMetadata, requestClaude } from '../../../lib/claude-api';
 import { requestOpenRouterChat } from '../../../lib/openrouter-api';
-import { cleanList, extractJson, flagMentions, sanitizeDirectionalFindings, summarizeClassifications, validateTopicalScanInput } from '../../../lib/topical-scan';
+import { calendarMonthWindows, cleanList, extractJson, filterMentionsToManilaRange, flagMentions, sanitizeDirectionalFindings, summarizeClassifications, validateTopicalScanInput } from '../../../lib/topical-scan';
 
-export const maxDuration = 300;
+export const maxDuration = 800;
 const CLAUDE_MODEL = 'claude-sonnet-4-6';
 const GEMINI_MODEL = 'gemini-3.6-flash';
 
@@ -69,17 +69,13 @@ async function pullGemini(input, theme) {
 
 async function pullSonar(input, theme) {
   const source = 'Sonar via OpenRouter';
-  try {
-    const data = await requestOpenRouterChat({ model: 'perplexity/sonar-pro', messages: [{ role: 'user', content: directionalPrompt(input, theme, 'the public web and social sources') }] });
-    return { source, status: 'complete', ...sanitizeDirectionalFindings(extractJson(data?.choices?.[0]?.message?.content, [])) };
-  } catch (error) {
-    return { source, status: 'skipped', error: error.message, findings: [], discarded: 0 };
-  }
+  const data = await requestOpenRouterChat({ model: 'perplexity/sonar-pro', messages: [{ role: 'user', content: directionalPrompt(input, theme, 'the public web and social sources') }] });
+  return { source, status: 'complete', ...sanitizeDirectionalFindings(extractJson(data?.choices?.[0]?.message?.content, [])) };
 }
 
-async function pool(tasks, concurrency = 2) {
+async function pool(tasks, concurrency = 2, onProgress = () => {}) {
   const results = new Array(tasks.length); let next = 0;
-  async function worker() { while (next < tasks.length) { const index = next++; const task = tasks[index]; try { results[index] = { themeIndex: task.themeIndex, ...(await task.run()) }; } catch (error) { results[index] = { themeIndex: task.themeIndex, source: task.source, status: 'error', error: error.message, findings: [], discarded: 0 }; } } }
+  async function worker() { while (next < tasks.length) { const index = next++; const task = tasks[index]; try { results[index] = { themeIndex: task.themeIndex, ...(await task.run()) }; } catch (error) { console.error('[Topical Scan] directional source unavailable', { source: task.source, themeIndex: task.themeIndex, error: error.message }); onProgress({ stage: 'source', message: `${task.source} unavailable: ${error.message}`, internal: true }); results[index] = { themeIndex: task.themeIndex, source: task.source, status: 'unavailable', findings: [], discarded: 0 }; } } }
   await Promise.all(Array.from({ length: Math.min(concurrency, tasks.length) }, worker));
   return results;
 }
@@ -87,27 +83,41 @@ async function pool(tasks, concurrency = 2) {
 async function executeScan(input, onProgress = () => {}) {
     const errors = validateTopicalScanInput(input);
     if (errors.length) { const error = new Error(errors.join(' ')); error.status = 400; throw error; }
-    onProgress({ stage: 'mentions', message: 'Pulling every monitored mention with cursor pagination' });
-    const mentionPull = await getMentions(String(input.projectId), input.dateFrom, input.dateTo, { limit: 500, maxMentions: Infinity, maxPages: 1000, timeoutMs: 60000, logger: console });
-    if (mentionPull.capped || mentionPull.hasMore || mentionPull.cursor) throw new Error('The full mention census did not complete. Metrics were not produced.');
-    onProgress({ stage: 'mentions', message: `Retrieved ${mentionPull.mentions.length} mentions across ${mentionPull.pages} pages` });
-    onProgress({ stage: 'reach', message: 'Pulling monitored reach' });
-    const reach = await getMentionsReach(String(input.projectId), input.dateFrom, input.dateTo, { timeoutMs: 60000, logger: console });
+    const windows = calendarMonthWindows(input.dateFrom, input.dateTo);
+    const mentions = []; const flagged = []; const classifications = []; const monthPulls = [];
+    let totalReach = 0; let backupUsed = false; let totalPages = 0; let rawRetrieved = 0; let duplicateMentions = 0; let mentionsWithoutId = 0; let apiCount = 0;
+    for (let monthIndex = 0; monthIndex < windows.length; monthIndex += 1) {
+      const window = windows[monthIndex]; const label = `${window.month} (${monthIndex + 1}/${windows.length})`;
+      onProgress({ stage: 'mentions', message: `${label} · pulling monitored mentions in Asia/Manila window ${window.dateFrom} 00:00–${window.dateTo} 23:59` });
+      const [mentionPull, reach, count] = await Promise.all([
+        getMentions(String(input.projectId), window.dateFrom, window.dateTo, { limit: 500, maxMentions: Infinity, maxPages: 1000, timeoutMs: 60000, logger: console }),
+        getMentionsReach(String(input.projectId), window.dateFrom, window.dateTo, { timeoutMs: 60000, logger: console }),
+        getMentionsCount(String(input.projectId), window.dateFrom, window.dateTo, { timeoutMs: 60000 }),
+      ]);
+      if (mentionPull.capped || mentionPull.hasMore || mentionPull.cursor) throw new Error(`${window.month} mention census did not complete. No report was produced.`);
+      const inRange = filterMentionsToManilaRange(mentionPull.mentions, window.dateFrom, window.dateTo);
+      const removedOutsideRange = mentionPull.mentions.length - inRange.length;
+      const monthFlagged = flagMentions(inRange, input.themes, input.exclusions, `${window.month}-`);
+      onProgress({ stage: 'mentions', message: `${label} · ${mentionPull.rawMentions} raw, ${mentionPull.mentions.length} unique, ${mentionPull.duplicateMentions} duplicates removed, ${removedOutsideRange} outside Manila range removed` });
+      onProgress({ stage: 'filtering', message: `${label} · ${monthFlagged.length} mentions flagged for classification` });
+      const monthClassification = await classify(monthFlagged, input.themes, progress => onProgress({ ...progress, message: `${label} · ${progress.message}` }));
+      mentions.push(...inRange); flagged.push(...monthFlagged); classifications.push(...monthClassification.results);
+      backupUsed ||= monthClassification.backupUsed; totalReach += reach.totalReach; apiCount += count.total; totalPages += mentionPull.pages; rawRetrieved += mentionPull.rawMentions; duplicateMentions += mentionPull.duplicateMentions; mentionsWithoutId += mentionPull.mentionsWithoutId;
+      monthPulls.push({ ...window, pages: mentionPull.pages, rawRetrieved: mentionPull.rawMentions, uniqueRetrieved: mentionPull.mentions.length, inRange: inRange.length, duplicatesRemoved: mentionPull.duplicateMentions, mentionsWithoutId: mentionPull.mentionsWithoutId, removedOutsideRange, minReturnedDate: mentionPull.minDate, maxReturnedDate: mentionPull.maxDate, apiCount: count.total });
+    }
     const expectedTotal = input.expectedTotal === '' || input.expectedTotal == null ? null : Number(input.expectedTotal);
-    const countMatchesExpected = expectedTotal == null || expectedTotal === mentionPull.mentions.length;
-    if (!countMatchesExpected) { const error = new Error(`Retrieved ${mentionPull.mentions.length} mentions, but the expected dashboard total is ${expectedTotal}. Classification stopped.`); error.status = 409; throw error; }
-    onProgress({ stage: 'filtering', message: 'Applying high-recall theme phrases and exclusions' });
-    const flagged = flagMentions(mentionPull.mentions, input.themes, input.exclusions);
-    onProgress({ stage: 'filtering', message: `${flagged.length} mentions flagged for classification` });
-    const classification = await classify(flagged, input.themes, onProgress);
-    const verified = summarizeClassifications({ mentions: mentionPull.mentions, flagged, classifications: classification.results, themes: input.themes, totalReach: reach.totalReach });
+    const differencePct = expectedTotal == null || expectedTotal === 0 ? null : Number((Math.abs(mentions.length - expectedTotal) / expectedTotal * 100).toFixed(2));
+    const countMatchesExpected = expectedTotal == null || differencePct <= 2;
+    const countWarning = countMatchesExpected ? '' : `Count does not match dashboard: monitoring API returned ${mentions.length.toLocaleString()} unique in-range mentions; expected dashboard total is ${expectedTotal.toLocaleString()} (${differencePct}% difference). Dashboard filters are not represented by the raw API response.`;
+    if (countWarning) onProgress({ stage: 'warning', message: countWarning });
+    const verified = summarizeClassifications({ mentions, flagged, classifications, themes: input.themes, totalReach, dateFrom: input.dateFrom, dateTo: input.dateTo });
     onProgress({ stage: 'directional', message: `Checking Grok, Gemini, and Sonar via OpenRouter for ${input.themes.length} themes (maximum two concurrent)` });
     const tasks = input.themes.flatMap((theme, themeIndex) => [
       { themeIndex, source: 'Grok', run: () => pullGrok(input, theme) },
       { themeIndex, source: 'Gemini', run: () => pullGemini(input, theme) },
       { themeIndex, source: 'Sonar via OpenRouter', run: () => pullSonar(input, theme) },
     ]);
-    const sourceResults = await pool(tasks, 2);
+    const sourceResults = await pool(tasks, 2, onProgress);
     const directional = input.themes.map((theme, themeIndex) => ({
       label: theme.label,
       manualNotes: String(theme.manualNotes || '').trim(),
@@ -116,12 +126,14 @@ async function executeScan(input, onProgress = () => {}) {
     onProgress({ stage: 'report', message: 'Assembling the complete topical report' });
     return {
       generatedAt: new Date().toISOString(), projectId: String(input.projectId), projectName: input.projectName || '', dateFrom: input.dateFrom, dateTo: input.dateTo,
-      pull: { pages: mentionPull.pages, retrieved: mentionPull.mentions.length, expectedTotal, countMatchesExpected },
-      claudeProvider: classification.backupUsed ? 'Claude via OpenRouter (backup)' : 'Claude direct',
-      claudeBackupUsed: classification.backupUsed,
+      timezone: 'Asia/Manila',
+      pull: { pages: totalPages, rawRetrieved, retrieved: mentions.length, duplicateMentions, mentionsWithoutId, apiCount, expectedTotal, countMatchesExpected, differencePct, countWarning, months: monthPulls, projectIdConfirmed: String(input.projectId) },
+      claudeProvider: backupUsed ? 'Claude via OpenRouter (backup)' : 'Claude direct',
+      claudeBackupUsed: backupUsed,
       verified, directional,
       coverageCaveat: 'Public monitoring cannot see closed Facebook groups, Messenger, Telegram, Viber, or other private conversations. Captured mentions are a floor, not all conversation.',
       privacyNote: 'Aggregate reporting only. Examples are paraphrased and identifying details are removed.',
+      filterAudit: 'The Brand24 REST mention rows expose no deleted, hidden, excluded, spam, active, or visibility field. Its documented mention endpoint exposes date, category, and sentiment filters, but no supported parameter for reproducing dashboard deletion, muted-author/domain, saved-search, geo/language, or relevance filters.',
     };
 }
 
