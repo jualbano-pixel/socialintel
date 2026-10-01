@@ -1,17 +1,17 @@
+import { requestGrokSearch } from '../../../lib/grok-api';
+
 export async function POST(request) {
   try {
     const body = await request.json();
-    const response = await fetch('https://api.x.ai/v1/responses', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.XAI_API_KEY}`,
-      },
-      body: JSON.stringify(body),
+    const result = await requestGrokSearch({ input: body.input, maxTokens: body.max_output_tokens });
+    return Response.json({
+      ...result.data,
+      output_text: result.text,
+      source_urls: result.sourceUrls,
+      _signalIntel: { grokProvider: result.provider },
     });
-    const data = await response.json();
-    return Response.json(data);
   } catch (e) {
-    return Response.json({ error: e.message }, { status: 500 });
+    const unavailable = e.message === 'Grok unavailable this run';
+    return Response.json({ error: e.message }, { status: unavailable ? 503 : 502 });
   }
 }

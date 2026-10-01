@@ -13,8 +13,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { claudeProviderMetadata, requestClaude } from '../../../lib/claude-api';
 import { requestOpenRouterChat } from '../../../lib/openrouter-api';
+import { requestGrokSearch } from '../../../lib/grok-api';
 
-const XAI_API_KEY = process.env.XAI_API_KEY!;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
 const GEMINI_MODEL = 'gemini-3.6-flash';
 const GEMINI_429_RETRIES = 2;
@@ -54,36 +54,17 @@ function sleep(ms: number): Promise<void> {
 }
 
 async function pullGrok(competitor: string, dateRange: string): Promise<SourcePull> {
-  const source = 'Grok (X/Twitter)';
+  const source = 'Grok via OpenRouter';
   try {
-    if (!XAI_API_KEY) return sourceError(source, 'XAI_API_KEY is not set');
-
-    const res = await fetch('https://api.x.ai/v1/responses', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${XAI_API_KEY}`,
-      },
-      body: JSON.stringify({
-        model: 'grok-4.3',
-        input: `Search X/Twitter for mentions of "${competitor}" during ${dateRange}. Summarize: top 3 themes/topics people are discussing, overall sentiment tone (positive/neutral/negative lean), and any notable spikes or viral moments. Infer the relevant industry from the competitor name and do not force a banking or fintech frame. Do not invent numbers — describe qualitatively only.`,
-        tools: [{ type: 'x_search' }, { type: 'web_search' }],
-      }),
+    const result = await requestGrokSearch({
+      input: `Search X/Twitter for mentions of "${competitor}" during ${dateRange}. Summarize: top 3 themes/topics people are discussing, overall sentiment tone (positive/neutral/negative lean), and any notable spikes or viral moments. Include x.com source URLs when X results are available. Infer the relevant industry from the competitor name and do not force a banking or fintech frame. Do not invent numbers — describe qualitatively only.`,
     });
-    const data = await readJsonResponse(res);
-    console.log('competitive-intel Grok response', {
+    console.log('competitive-intel Grok via OpenRouter response', {
       competitor,
-      status: res.status,
-      ok: res.ok,
-      outputBlocks: Array.isArray(data?.output) ? data.output.length : 0,
-      error: data?.error,
+      provider: result.provider,
+      sourceUrlCount: result.sourceUrls.length,
     });
-    if (!res.ok) {
-      return sourceError(source, `HTTP ${res.status} ${res.statusText}: ${data?.error?.message || data?.error || data?.raw || 'unknown response'}`);
-    }
-    // output[0] is the reasoning block, output[1] is the text response —
-    // same quirk noted in the main Signal Intel v3 handoff.
-    const text = data?.output?.[1]?.content?.[0]?.text ?? '';
+    const text = result.text;
     if (!text.trim()) return sourceError(source, 'empty response text');
     return { source, themes: text };
   } catch (err: any) {

@@ -167,7 +167,8 @@ If no matching project exists, return ONLY:
 }
 
 function parseGrokText(data) {
-  return data?.output?.[1]?.content?.[0]?.text
+  return data?.choices?.[0]?.message?.content
+    ?? data?.output?.[1]?.content?.[0]?.text
     ?? data?.output_text
     ?? data?.output?.find?.(b => b.type === 'message')?.content?.[0]?.text
     ?? data?.output?.find?.(b => b.content?.[0]?.text)?.content?.[0]?.text
@@ -385,27 +386,25 @@ function savedSetupForBrand(brand) {
 async function callGrok(brand, competitors, period) {
   try {
     const r = await fetch('/api/grok', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'grok-4.3',
+      body: JSON.stringify({
         input: [
           { role: 'system', content: 'Social media intelligence analyst for Philippine agency. Be specific and factual.' },
           { role: 'user', content: `Search X/Twitter and Reddit for "${brand}" in Philippines during ${period}. Identify SPECIFICALLY: 1) What events/campaigns/announcements caused mention spikes? Name them. 2) What were people actually talking about — specific products, partnerships, incidents? 3) Specific complaints with examples? 4) Positive reactions? 5) Scam/fraud warnings? Competitor signals: ${competitors.slice(0,3).join(', ')}.` }
-        ],
-        tools: [{ type: 'x_search' }, { type: 'web_search' }]
+        ]
       })
     });
     const d = await r.json();
+    if (!r.ok || d.error) throw new Error(d.error?.message || d.error || `Grok via OpenRouter request failed with ${r.status}`);
     return parseGrokText(d);
-  } catch(e) { console.warn('Grok:', e.message); return null; }
+  } catch(e) { console.warn('Grok via OpenRouter:', e.message); return null; }
 }
 
-async function grokIntel(prompt, label = 'Grok Query') {
+async function grokIntel(prompt, label = 'Grok via OpenRouter Query') {
   const payload = {
-    model: 'grok-4.3',
     input: [
       { role: 'system', content: 'Social media intelligence analyst. Return specific public posts, URLs when available, concise summaries, and clearly separate facts from inference.' },
       { role: 'user', content: prompt }
-    ],
-    tools: [{ type: 'x_search' }, { type: 'web_search' }]
+    ]
   };
   console.log(`[${label}] /api/grok request`, payload);
   const r = await fetch('/api/grok', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
@@ -1333,7 +1332,7 @@ function IntelligenceQuery({ query, setQuery, loading, result, error, open, setO
     <div style={{ ...CARD, marginBottom:14, borderColor:'var(--accent-info-border)' }}>
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:12, marginBottom:12 }}>
         <div>
-          <div style={{ color:'var(--accent-info)', fontSize:10, letterSpacing:'0.16em', textTransform:'uppercase', fontFamily:"'JetBrains Mono',monospace", marginBottom:4 }}>Intelligence Query — Grok Live Search</div>
+          <div style={{ color:'var(--accent-info)', fontSize:10, letterSpacing:'0.16em', textTransform:'uppercase', fontFamily:"'JetBrains Mono',monospace", marginBottom:4 }}>Intelligence Query — Grok via OpenRouter</div>
           <div style={{ color:'var(--text-muted)', fontSize:12 }}>Ask about a topic, complaint, campaign, or audience question.</div>
         </div>
         {result && <button onClick={() => setOpen(!open)} style={{ background:'var(--bg-surface)', border:'1px solid var(--border-strong)', borderRadius:6, color:'var(--text-muted)', padding:'8px 10px', cursor:'pointer', fontSize:11 }}>{open?'Collapse':'Expand'}</button>}
@@ -1415,7 +1414,7 @@ function SourceAttribution({ hasB24, hasGrok, competitiveLite, manualVerified, u
         note={manualVerified ? 'Manually verified data from uploaded monitoring export' : hasB24 ? 'Verified live metrics' : 'Tracking source not live for this run'}
       />
       <SourceBadge label="Claude" active={statuses.claude.active} note={statuses.claude.note} />
-      <SourceBadge label="Grok" active={statuses.grok.active} note={statuses.grok.note} />
+      <SourceBadge label="Grok via OpenRouter" active={statuses.grok.active} note={statuses.grok.note} />
       <SourceBadge label="Google AI" active={statuses.gemini.active} note={statuses.gemini.note} />
       <SourceBadge label="Sonar via OpenRouter" active={statuses.perplexity.active} note={statuses.perplexity.note} />
       <SourceBadge label="Meta AI" active={statuses.meta.active} note={statuses.meta.note} />
@@ -1817,11 +1816,11 @@ Start with a one-paragraph summary. Label uncertain matches.`,
 Topic query: "${query.trim()}"
 ${demoContext ? `Known demo context to use when relevant: ${demoContext}` : ''}
 Return a concise intelligence summary, recurring themes, specific public posts or articles with URLs when available, sentiment read, and recommended brand action.`,
-        'Grok Query'
+        'Grok via OpenRouter Query'
       );
       setQueryResult(result);
     } catch (e) {
-      console.error('[Grok Query] error', e);
+      console.error('[Grok via OpenRouter Query] error', e);
       setQueryError(e.message);
     } finally {
       setQueryLoading(false);
@@ -2052,7 +2051,7 @@ Return a concise intelligence summary, recurring themes, specific public posts o
             <div style={{ color:'var(--text-muted)', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase', marginBottom:6, fontFamily:"'JetBrains Mono',monospace" }}>Environment</div>
             <p style={{ color:'var(--text-faint)', fontSize:11, fontFamily:"'JetBrains Mono',monospace", lineHeight:1.7 }}>
               // ANTHROPIC_API_KEY → Claude synthesis auth<br/>
-              // XAI_API_KEY → Grok x_search + web_search<br/>
+              // OPENROUTER_API_KEY → Grok native web + X search<br/>
               // Set in Vercel Dashboard → Environment Variables
             </p>
           </div>
@@ -2148,7 +2147,7 @@ Return a concise intelligence summary, recurring themes, specific public posts o
             <div style={{ color:'var(--text-muted)', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase' }}>Spike Drivers · {hasGrok?'Grok-grounded':'monitoring-grounded'}</div>
             <div style={{ display:'flex', gap:6 }}>
               {hasB24 && <span style={{ background:'var(--accent-live-softer)', border:`1px solid var(--accent-live-border)`, borderRadius:10, padding:'2px 8px', fontSize:9, color:LIME }}>LIVE ✓</span>}
-              {hasGrok && <span style={{ background:'var(--accent-info-soft)', border:'1px solid var(--accent-info-border)', borderRadius:10, padding:'2px 8px', fontSize:9, color:'var(--accent-info)' }}>GROK ✓</span>}
+              {hasGrok && <span style={{ background:'var(--accent-info-soft)', border:'1px solid var(--accent-info-border)', borderRadius:10, padding:'2px 8px', fontSize:9, color:'var(--accent-info)' }}>GROK VIA OPENROUTER ✓</span>}
             </div>
           </div>
           {displaySpikeDrivers?.map((d,i) => (
@@ -2185,8 +2184,8 @@ Return a concise intelligence summary, recurring themes, specific public posts o
         {hasGrok && context.grokSignals && (
           <div style={{ ...CARD, marginBottom:14, borderColor:'var(--accent-info-soft)' }}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:10 }}>
-              <div style={{ color:'var(--text-muted)', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase' }}>X/Twitter Signals · Grok Live Search</div>
-              <span style={{ background:'var(--accent-info-soft)', border:'1px solid var(--accent-info-border)', borderRadius:10, padding:'2px 8px', fontSize:9, color:'var(--accent-info)' }}>GROK ✓</span>
+              <div style={{ color:'var(--text-muted)', fontSize:10, letterSpacing:'0.12em', textTransform:'uppercase' }}>X/Twitter Signals · Grok via OpenRouter</div>
+              <span style={{ background:'var(--accent-info-soft)', border:'1px solid var(--accent-info-border)', borderRadius:10, padding:'2px 8px', fontSize:9, color:'var(--accent-info)' }}>GROK VIA OPENROUTER ✓</span>
             </div>
             <p style={{ color:'var(--text-muted)', fontSize:12, lineHeight:1.7 }}>{context.grokSignals.substring(0, 700)}</p>
           </div>
@@ -2307,7 +2306,7 @@ Return a concise intelligence summary, recurring themes, specific public posts o
         </form>
       </Drawer>
 
-      <Drawer open={sentimentOpen} title={`${sentimentLabel || 'Sentiment'} Posts`} eyebrow="Powered by Grok" onClose={() => setSentimentOpen(false)}>
+      <Drawer open={sentimentOpen} title={`${sentimentLabel || 'Sentiment'} Posts`} eyebrow="Grok via OpenRouter" onClose={() => setSentimentOpen(false)}>
         {sentimentLoading
           ? <div style={{ color:'var(--text-muted)', fontSize:12, fontFamily:"'JetBrains Mono',monospace" }}>Searching live posts...</div>
           : <>

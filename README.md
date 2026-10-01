@@ -1,14 +1,14 @@
 # Signal Intel v3 · Praxis Experiential
 
 6-agent social intelligence pipeline.
-Brand24 MCP · Grok x_search · Claude AI · Next.js · Vercel
+Brand24 MCP · Grok via OpenRouter · Claude AI · Next.js · Vercel
 
 ## Stack
 
 | Layer | Tool |
 |---|---|
 | Quantitative data | Brand24 MCP (mentions, reach, sentiment, SOV) |
-| X/Twitter signals | Grok API (x_search + web_search) |
+| X/Twitter signals | Grok via OpenRouter (`x-ai/grok-4.7`, native web + X search) |
 | Intelligence synthesis | Claude API (6-agent pipeline) |
 | Deployment | Vercel |
 
@@ -29,7 +29,8 @@ git push -u origin main
 3. Framework: Next.js (auto-detected)
 4. Add environment variables:
    - `ANTHROPIC_API_KEY` — from console.anthropic.com
-   - `XAI_API_KEY` — from console.x.ai
+   - `OPENROUTER_API_KEY` — primary Grok and Sonar access
+   - `XAI_API_KEY` — optional direct Grok fallback; skipped cleanly when absent
 
 ### 3. Connect Brand24
 Brand24 auth is handled via your Anthropic account connector.

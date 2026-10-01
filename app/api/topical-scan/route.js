@@ -1,6 +1,7 @@
 import { getMentions, getMentionsCount, getMentionsReach, toClientSafeError } from '../../../lib/brand24-rest';
 import { claudeProviderMetadata, requestClaude } from '../../../lib/claude-api';
 import { requestOpenRouterChat } from '../../../lib/openrouter-api';
+import { requestGrokSearch } from '../../../lib/grok-api';
 import { calendarMonthWindows, cleanList, extractJson, filterMentionsToManilaRange, flagMentions, sanitizeDirectionalFindings, summarizeClassifications, validateTopicalScanInput } from '../../../lib/topical-scan';
 
 export const maxDuration = 800;
@@ -44,15 +45,13 @@ function directionalPrompt(input, theme, sourceLine) {
 }
 
 async function pullGrok(input, theme) {
-  if (!configured(process.env.XAI_API_KEY)) return { source: 'Grok', status: 'not configured', findings: [], discarded: 0 };
-  const response = await fetch('https://api.x.ai/v1/responses', {
-    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.XAI_API_KEY}` },
-    body: JSON.stringify({ model: 'grok-4.3', input: directionalPrompt(input, theme, 'X/Twitter and Reddit'), tools: [{ type: 'x_search' }, { type: 'web_search' }] }),
-  });
-  const data = await readJson(response);
-  if (!response.ok) throw new Error(data?.error?.message || `Grok failed (${response.status}).`);
-  const text = data?.output_text || data?.output?.find(block => block.type === 'message')?.content?.find(block => block.type === 'output_text')?.text || '';
-  return { source: 'Grok', status: 'complete', ...sanitizeDirectionalFindings(extractJson(text, [])) };
+  try {
+    const result = await requestGrokSearch({ input: directionalPrompt(input, theme, 'X/Twitter and Reddit; include x.com source URLs when X results are available') });
+    return { source: 'Grok via OpenRouter', status: 'complete', ...sanitizeDirectionalFindings(extractJson(result.text, [])) };
+  } catch (error) {
+    if (error.message === 'Grok unavailable this run') return { source: 'Grok via OpenRouter', status: 'Grok unavailable this run', findings: [], discarded: 0 };
+    throw error;
+  }
 }
 
 async function pullGemini(input, theme) {
@@ -111,9 +110,9 @@ async function executeScan(input, onProgress = () => {}) {
     const countWarning = countMatchesExpected ? '' : `Count does not match dashboard: monitoring API returned ${mentions.length.toLocaleString()} unique in-range mentions; expected dashboard total is ${expectedTotal.toLocaleString()} (${differencePct}% difference). Dashboard filters are not represented by the raw API response.`;
     if (countWarning) onProgress({ stage: 'warning', message: countWarning });
     const verified = summarizeClassifications({ mentions, flagged, classifications, themes: input.themes, totalReach, dateFrom: input.dateFrom, dateTo: input.dateTo });
-    onProgress({ stage: 'directional', message: `Checking Grok, Gemini, and Sonar via OpenRouter for ${input.themes.length} themes (maximum two concurrent)` });
+    onProgress({ stage: 'directional', message: `Checking Grok via OpenRouter, Gemini, and Sonar via OpenRouter for ${input.themes.length} themes (maximum two concurrent)` });
     const tasks = input.themes.flatMap((theme, themeIndex) => [
-      { themeIndex, source: 'Grok', run: () => pullGrok(input, theme) },
+      { themeIndex, source: 'Grok via OpenRouter', run: () => pullGrok(input, theme) },
       { themeIndex, source: 'Gemini', run: () => pullGemini(input, theme) },
       { themeIndex, source: 'Sonar via OpenRouter', run: () => pullSonar(input, theme) },
     ]);
