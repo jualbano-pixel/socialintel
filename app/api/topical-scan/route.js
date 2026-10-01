@@ -47,7 +47,21 @@ function directionalPrompt(input, theme, sourceLine) {
 async function pullGrok(input, theme) {
   try {
     const result = await requestGrokSearch({ input: directionalPrompt(input, theme, 'X/Twitter and Reddit; include x.com source URLs when X results are available') });
-    return { source: 'Grok via OpenRouter', status: 'complete', ...sanitizeDirectionalFindings(extractJson(result.text, [])) };
+    const parsed = extractJson(result.text, []);
+    const findings = Array.isArray(parsed) ? [...parsed] : [];
+    const existingUrls = new Set(findings.map(finding => String(finding?.url || '').trim()));
+    for (const url of result.sourceUrls.filter(sourceUrl => /^https?:\/\/(?:www\.)?(?:x\.com|twitter\.com)\//i.test(sourceUrl))) {
+      if (existingUrls.has(url)) continue;
+      findings.push({
+        url,
+        platform: 'X',
+        date: '',
+        paraphrase: 'X post cited by Grok native search for this theme.',
+        stance: 'neutral',
+      });
+      existingUrls.add(url);
+    }
+    return { source: 'Grok via OpenRouter', status: 'complete', ...sanitizeDirectionalFindings(findings) };
   } catch (error) {
     if (error.message === 'Grok unavailable this run') return { source: 'Grok via OpenRouter', status: 'Grok unavailable this run', findings: [], discarded: 0 };
     throw error;
