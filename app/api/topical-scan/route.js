@@ -40,27 +40,29 @@ async function classify(flagged, themes, onProgress = () => {}) {
   return { results, backupUsed };
 }
 
-function directionalPrompt(input, theme, sourceLine) {
-  return `Search ${sourceLine} for public posts from the Philippines, ${input.dateFrom}–${input.dateTo}, about ${input.projectName || 'the selected brand'} (${cleanList(input.aliases).join(', ') || 'brand name'}) related to: ${theme.description}. Relevant phrases: ${cleanList(theme.phrases).join(', ')}. Return ONLY a JSON array of objects with url, platform, date, paraphrase, and stance. Include only sources that explicitly reference the brand. Paraphrase; omit usernames, names, account details, and personal amounts. If nothing qualifies, return []. Do not substitute generic content.`;
+function directionalPrompt(input, theme, sourceLine, limit = null) {
+  const projectName = input.projectName || 'the selected brand';
+  return `Search ${sourceLine} for public posts from the Philippines, ${input.dateFrom}–${input.dateTo}, about ${projectName} (${cleanList(input.aliases).join(', ') || 'brand name'}) related to: ${theme.description}. Relevant phrases: ${cleanList(theme.phrases).join(', ')}. Return ONLY a JSON array of objects with url, platform, date, paraphrase, and stance.${limit ? ` Return no more than ${limit} posts.` : ''} Include only posts explicitly about ${projectName}; each paraphrase must be exactly one sentence, must explicitly name ${projectName}, and must describe that specific cited post. Omit usernames, personal names, handles, account details, and personal amounts. Every object must have a working source URL and a non-empty paraphrase. If nothing qualifies, return []. Do not substitute generic content.`;
 }
 
 async function pullGrok(input, theme) {
   try {
-    const result = await requestGrokSearch({ input: directionalPrompt(input, theme, 'X/Twitter and Reddit; include x.com source URLs when X results are available') });
+    const result = await requestGrokSearch({ input: directionalPrompt(input, theme, 'X/Twitter; include the x.com URL for every returned post', 5) });
     const parsed = extractJson(result.text, []);
-    const findings = Array.isArray(parsed) ? [...parsed] : [];
-    const existingUrls = new Set(findings.map(finding => String(finding?.url || '').trim()));
-    for (const url of result.sourceUrls.filter(sourceUrl => /^https?:\/\/(?:www\.)?(?:x\.com|twitter\.com)\//i.test(sourceUrl))) {
-      if (existingUrls.has(url)) continue;
-      findings.push({
-        url,
-        platform: 'X',
-        date: '',
-        paraphrase: 'X post cited by Grok native search for this theme.',
-        stance: 'neutral',
-      });
-      existingUrls.add(url);
-    }
+    const citedXUrls = new Set(result.sourceUrls.filter(url => /^https?:\/\/(?:www\.)?(?:x\.com|twitter\.com)\//i.test(url)).map(url => url.replace(/\/$/, '')));
+    const brandTerms = [input.projectName, ...cleanList(input.aliases)].map(term => String(term || '').trim().toLocaleLowerCase()).filter(term => term.length >= 3);
+    const seen = new Set();
+    const findings = (Array.isArray(parsed) ? parsed : []).filter(finding => {
+      const url = String(finding?.url || '').trim().replace(/\/$/, '');
+      const paraphrase = String(finding?.paraphrase || '').replace(/\s+/g, ' ').trim();
+      if (!url || !paraphrase || !citedXUrls.has(url) || seen.has(url)) return false;
+      if (!brandTerms.some(term => paraphrase.toLocaleLowerCase().includes(term))) return false;
+      seen.add(url);
+      finding.url = url;
+      finding.platform = 'X';
+      finding.paraphrase = paraphrase;
+      return true;
+    }).slice(0, 5);
     return { source: 'Grok via OpenRouter', status: 'complete', ...sanitizeDirectionalFindings(findings) };
   } catch (error) {
     if (error.message === 'Grok unavailable this run') return { source: 'Grok via OpenRouter', status: 'Grok unavailable this run', findings: [], discarded: 0 };
@@ -123,7 +125,7 @@ async function executeScan(input, onProgress = () => {}) {
     const countMatchesExpected = expectedTotal == null || differencePct <= 2;
     const countWarning = countMatchesExpected ? '' : `Count does not match dashboard: monitoring API returned ${mentions.length.toLocaleString()} unique in-range mentions; expected dashboard total is ${expectedTotal.toLocaleString()} (${differencePct}% difference). Dashboard filters are not represented by the raw API response.`;
     if (countWarning) onProgress({ stage: 'warning', message: countWarning });
-    const verified = summarizeClassifications({ mentions, flagged, classifications, themes: input.themes, totalReach, dateFrom: input.dateFrom, dateTo: input.dateTo });
+    const verified = summarizeClassifications({ mentions, flagged, classifications, themes: input.themes, totalReach, dateFrom: input.dateFrom, dateTo: input.dateTo, monthPulls });
     onProgress({ stage: 'directional', message: `Checking Grok via OpenRouter, Gemini, and Sonar via OpenRouter for ${input.themes.length} themes (maximum two concurrent)` });
     const tasks = input.themes.flatMap((theme, themeIndex) => [
       { themeIndex, source: 'Grok via OpenRouter', run: () => pullGrok(input, theme) },
@@ -137,10 +139,11 @@ async function executeScan(input, onProgress = () => {}) {
       sources: sourceResults.filter(result => result.themeIndex === themeIndex),
     }));
     onProgress({ stage: 'report', message: 'Assembling the complete topical report' });
+    const mentionDates = mentions.map(mention => String(mention?.date || mention?.published_at || mention?.publishedAt || mention?.created_at || mention?.createdAt || '').slice(0, 10)).filter(date => /^\d{4}-\d{2}-\d{2}$/.test(date)).sort();
     return {
       generatedAt: new Date().toISOString(), projectId: String(input.projectId), projectName: input.projectName || '', dateFrom: input.dateFrom, dateTo: input.dateTo,
       timezone: 'Asia/Manila',
-      pull: { pages: totalPages, rawRetrieved, retrieved: mentions.length, duplicateMentions, mentionsWithoutId, apiCount, expectedTotal, countMatchesExpected, differencePct, countWarning, months: monthPulls, projectIdConfirmed: String(input.projectId) },
+      pull: { pages: totalPages, rawRetrieved, retrieved: mentions.length, duplicateMentions, mentionsWithoutId, apiCount, expectedTotal, countMatchesExpected, differencePct, countWarning, months: monthPulls, projectIdConfirmed: String(input.projectId), coverageDateFrom: mentionDates[0] || null, coverageDateTo: mentionDates.at(-1) || null },
       claudeProvider: backupUsed ? 'Claude via OpenRouter (backup)' : 'Claude direct',
       claudeBackupUsed: backupUsed,
       verified, directional,
