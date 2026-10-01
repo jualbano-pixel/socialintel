@@ -12,9 +12,9 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { claudeProviderMetadata, requestClaude } from '../../../lib/claude-api';
+import { requestOpenRouterChat } from '../../../lib/openrouter-api';
 
 const XAI_API_KEY = process.env.XAI_API_KEY!;
-const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY!;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
 const GEMINI_MODEL = 'gemini-3.6-flash';
 const GEMINI_429_RETRIES = 2;
@@ -93,33 +93,22 @@ async function pullGrok(competitor: string, dateRange: string): Promise<SourcePu
 }
 
 async function pullPerplexity(competitor: string, dateRange: string): Promise<SourcePull> {
-  // Key not provisioned yet (pending) — skip cleanly instead of breaking the
-  // whole competitor lookup. Remove this guard once PERPLEXITY_API_KEY is live.
-  if (!PERPLEXITY_API_KEY) {
-    return {
-      source: 'Perplexity (News/LinkedIn/YouTube)',
-      themes: '[Perplexity not wired yet — key pending]',
-    };
-  }
-  const res = await fetch('https://api.perplexity.ai/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${PERPLEXITY_API_KEY}`,
-    },
-    body: JSON.stringify({
-      model: 'sonar-pro',
-      messages: [
+  const source = 'Sonar via OpenRouter (News/LinkedIn/YouTube)';
+  try {
+    const data = await requestOpenRouterChat({
+      model: 'perplexity/sonar-pro', messages: [
         {
           role: 'user',
           content: `What is being said about "${competitor}" in news coverage, LinkedIn posts, and YouTube content during ${dateRange}? Summarize top 3 themes and overall tone. Infer the relevant industry from the competitor name and do not force a banking or fintech frame. Qualitative summary only — no fabricated statistics.`,
         },
       ],
-    }),
-  });
-  const data = await res.json();
-  const text = data?.choices?.[0]?.message?.content ?? '';
-  return { source: 'Perplexity (News/LinkedIn/YouTube)', themes: text };
+    });
+    const text = data?.choices?.[0]?.message?.content ?? '';
+    if (!text.trim()) return sourceError(source, 'empty response text');
+    return { source, themes: text };
+  } catch (error: any) {
+    return sourceError(source, error?.message || 'OpenRouter request failed; source skipped');
+  }
 }
 
 async function pullGemini(competitor: string, dateRange: string): Promise<SourcePull> {

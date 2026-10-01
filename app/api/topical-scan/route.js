@@ -1,5 +1,6 @@
 import { getMentions, getMentionsReach, toClientSafeError } from '../../../lib/brand24-rest';
 import { claudeProviderMetadata, requestClaude } from '../../../lib/claude-api';
+import { requestOpenRouterChat } from '../../../lib/openrouter-api';
 import { cleanList, extractJson, flagMentions, sanitizeDirectionalFindings, summarizeClassifications, validateTopicalScanInput } from '../../../lib/topical-scan';
 
 export const maxDuration = 300;
@@ -67,14 +68,13 @@ async function pullGemini(input, theme) {
 }
 
 async function pullSonar(input, theme) {
-  if (!configured(process.env.PERPLEXITY_API_KEY)) return { source: 'Sonar', status: 'not configured', findings: [], discarded: 0 };
-  const response = await fetch('https://api.perplexity.ai/chat/completions', {
-    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${process.env.PERPLEXITY_API_KEY}` },
-    body: JSON.stringify({ model: 'sonar-pro', messages: [{ role: 'user', content: directionalPrompt(input, theme, 'the public web and social sources') }] }),
-  });
-  const data = await readJson(response);
-  if (!response.ok) throw new Error(data?.error?.message || `Sonar failed (${response.status}).`);
-  return { source: 'Sonar', status: 'complete', ...sanitizeDirectionalFindings(extractJson(data?.choices?.[0]?.message?.content, [])) };
+  const source = 'Sonar via OpenRouter';
+  try {
+    const data = await requestOpenRouterChat({ model: 'perplexity/sonar-pro', messages: [{ role: 'user', content: directionalPrompt(input, theme, 'the public web and social sources') }] });
+    return { source, status: 'complete', ...sanitizeDirectionalFindings(extractJson(data?.choices?.[0]?.message?.content, [])) };
+  } catch (error) {
+    return { source, status: 'skipped', error: error.message, findings: [], discarded: 0 };
+  }
 }
 
 async function pool(tasks, concurrency = 2) {
@@ -101,11 +101,11 @@ async function executeScan(input, onProgress = () => {}) {
     onProgress({ stage: 'filtering', message: `${flagged.length} mentions flagged for classification` });
     const classification = await classify(flagged, input.themes, onProgress);
     const verified = summarizeClassifications({ mentions: mentionPull.mentions, flagged, classifications: classification.results, themes: input.themes, totalReach: reach.totalReach });
-    onProgress({ stage: 'directional', message: `Checking three directional sources for ${input.themes.length} themes (maximum two concurrent)` });
+    onProgress({ stage: 'directional', message: `Checking Grok, Gemini, and Sonar via OpenRouter for ${input.themes.length} themes (maximum two concurrent)` });
     const tasks = input.themes.flatMap((theme, themeIndex) => [
       { themeIndex, source: 'Grok', run: () => pullGrok(input, theme) },
       { themeIndex, source: 'Gemini', run: () => pullGemini(input, theme) },
-      { themeIndex, source: 'Sonar', run: () => pullSonar(input, theme) },
+      { themeIndex, source: 'Sonar via OpenRouter', run: () => pullSonar(input, theme) },
     ]);
     const sourceResults = await pool(tasks, 2);
     const directional = input.themes.map((theme, themeIndex) => ({

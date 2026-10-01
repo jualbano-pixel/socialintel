@@ -81,6 +81,10 @@ function recordClaudeProvider(data, label = 'Claude') {
   window.dispatchEvent(new CustomEvent('signal-intel-claude-provider', { detail: { ...data._signalIntel, label, at: new Date().toISOString() } }));
 }
 
+function recordRunLog(message) {
+  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('signal-intel-run-log', { detail: { message } }));
+}
+
 function brandKey(value) {
   return String(value || '')
     .toLowerCase()
@@ -784,6 +788,8 @@ async function competitiveIntelLiteAgent(competitors, dateRange) {
     });
     const data = await r.json();
     recordClaudeProvider(data, 'Competitive Intel synthesis');
+    const sonarSources = (data.competitors || []).flatMap(item => item.sources || []).filter(source => String(source.source || '').includes('Sonar via OpenRouter'));
+    if (sonarSources.length) recordRunLog(`Sonar via OpenRouter · ${sonarSources.some(source => !String(source.themes || '').includes(' error:')) ? 'complete' : 'skipped after provider error'}`);
     console.log('[Competitive Intel Lite] /api/competitive-intel response', data);
     if (!r.ok || data.error) throw new Error(data.error || `Competitive Intel Lite failed with ${r.status}`);
     return data;
@@ -1393,7 +1399,7 @@ function getSourceStatuses({ hasGrok, competitiveLite }) {
     claude: { active: true, note: 'Claude synthesis engine active' },
     grok: { active: !!hasGrok || hasUsableSource('grok'), note: (hasGrok || hasUsableSource('grok')) ? 'Grok live search returned signal' : 'Grok did not return usable signal for this run' },
     gemini: { active: hasUsableSource('gemini'), note: hasUsableSource('gemini') ? 'Google AI returned usable directional context' : 'No usable Google AI signal for this run' },
-    perplexity: { active: hasUsableSource('perplexity'), note: hasUsableSource('perplexity') ? 'Perplexity returned usable directional context' : 'No usable Perplexity signal for this run' },
+    perplexity: { active: hasUsableSource('sonar via openrouter'), note: hasUsableSource('sonar via openrouter') ? 'Sonar via OpenRouter returned usable directional context' : 'No usable Sonar via OpenRouter signal for this run' },
     meta: { active: false, note: 'No usable Meta signal for this run' },
   };
 }
@@ -1411,7 +1417,7 @@ function SourceAttribution({ hasB24, hasGrok, competitiveLite, manualVerified, u
       <SourceBadge label="Claude" active={statuses.claude.active} note={statuses.claude.note} />
       <SourceBadge label="Grok" active={statuses.grok.active} note={statuses.grok.note} />
       <SourceBadge label="Google AI" active={statuses.gemini.active} note={statuses.gemini.note} />
-      <SourceBadge label="Perplexity" active={statuses.perplexity.active} note={statuses.perplexity.note} />
+      <SourceBadge label="Sonar via OpenRouter" active={statuses.perplexity.active} note={statuses.perplexity.note} />
       <SourceBadge label="Meta AI" active={statuses.meta.active} note={statuses.meta.note} />
       <span style={{ color:'var(--text-muted)', fontSize:9, fontFamily:"'JetBrains Mono',monospace" }}>*wired / pending / manual</span>
     </div>
@@ -1428,7 +1434,7 @@ function DirectionalIntelLite({ competitiveLite }) {
       <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start', gap:12, marginBottom:12 }}>
         <div>
           <div style={{ color:'var(--accent-info)', fontSize:10, letterSpacing:'0.14em', textTransform:'uppercase', fontFamily:"'JetBrains Mono',monospace", marginBottom:4 }}>Directional Intelligence · AI-native sources</div>
-          <p style={{ color:'var(--text-muted)', fontSize:12, lineHeight:1.55, margin:0 }}>Grok, Perplexity, Gemini, and optional manual Meta AI notes. Not audited live monitoring mention data.</p>
+          <p style={{ color:'var(--text-muted)', fontSize:12, lineHeight:1.55, margin:0 }}>Grok, Sonar via OpenRouter, Gemini, and optional manual Meta AI notes. Not audited live monitoring mention data.</p>
         </div>
         <span style={{ background:'var(--accent-info-soft)', border:'1px solid var(--accent-info-border)', borderRadius:10, padding:'3px 9px', fontSize:9, color:'var(--accent-info)', whiteSpace:'nowrap', fontFamily:"'JetBrains Mono',monospace" }}>AI-NATIVE</span>
       </div>
@@ -1521,7 +1527,9 @@ export default function SignalIntel() {
       setClaudeRunLog(previous => [...previous, `${detail.label || 'Claude'} · ${detail.claudeProviderLabel || 'Claude direct'}`]);
     };
     window.addEventListener('signal-intel-claude-provider', onProvider);
-    return () => window.removeEventListener('signal-intel-claude-provider', onProvider);
+    const onRunLog = event => setClaudeRunLog(previous => [...previous, event.detail?.message || 'Provider update']);
+    window.addEventListener('signal-intel-run-log', onRunLog);
+    return () => { window.removeEventListener('signal-intel-claude-provider', onProvider); window.removeEventListener('signal-intel-run-log', onRunLog); };
   }, []);
 
   useEffect(() => {
