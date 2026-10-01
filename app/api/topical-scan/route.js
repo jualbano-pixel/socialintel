@@ -64,9 +64,10 @@ function xPostDate(url) {
 
 async function validateCitationUrl(url) {
   const normalized = normalizedUrl(url);
-  if (!normalized) return null;
+  if (!normalized) return { ok: false, reason: 'invalid_url' };
   const parsed = new URL(normalized);
   const isReddit = /(^|\.)reddit\.com$/i.test(parsed.hostname);
+  const redditId = isReddit ? parsed.pathname.match(/\/comments\/([a-z0-9]+)/i)?.[1] || '' : '';
   const redditJsonUrl = new URL(normalized);
   if (isReddit) redditJsonUrl.pathname = `${redditJsonUrl.pathname.replace(/\/$/, '')}.json`;
   const validationUrl = isReddit ? redditJsonUrl.toString() : normalized;
@@ -76,24 +77,27 @@ async function validateCitationUrl(url) {
       signal: AbortSignal.timeout(10000),
       headers: { 'User-Agent': 'SignalIntelCitationValidator/1.0', Accept: isReddit ? 'application/json' : 'text/html,application/xhtml+xml,application/json' },
     });
-    if (!response.ok) return null;
+    if (!response.ok) {
+      if (isReddit && [403, 429].includes(response.status) && redditId) return { ok: true, url: normalized, redditId, needsEstimatedDate: true };
+      return { ok: false, reason: `http_${response.status}` };
+    }
     if (isReddit) {
       const data = await response.json();
       const created = data?.[0]?.data?.children?.[0]?.data?.created_utc;
-      if (!Number.isFinite(Number(created))) return null;
-      return { url: normalized, date: new Date(Number(created) * 1000).toISOString().slice(0, 10) };
+      if (!Number.isFinite(Number(created))) return { ok: false, reason: 'reddit_created_utc_missing' };
+      return { ok: true, url: normalized, date: new Date(Number(created) * 1000).toISOString().slice(0, 10), dateEstimated: false };
     }
     const xDate = /(^|\.)(x\.com|twitter\.com)$/i.test(parsed.hostname) ? xPostDate(normalized) : '';
-    if (xDate) return { url: normalized, date: xDate };
+    if (xDate) return { ok: true, url: normalized, date: xDate, dateEstimated: false };
     const html = await response.text();
     const dateMatch = html.match(/<meta[^>]+(?:property|name)=["'](?:article:published_time|datePublished|datepublished|publish-date|publication_date)["'][^>]+content=["']([^"']+)["']/i)
       || html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["'](?:article:published_time|datePublished|datepublished|publish-date|publication_date)["']/i)
       || html.match(/["']datePublished["']\s*:\s*["']([^"']+)["']/i)
       || html.match(/<time[^>]+datetime=["']([^"']+)["']/i);
     const date = dateMatch?.[1] ? new Date(dateMatch[1]) : null;
-    if (!date || Number.isNaN(date.valueOf())) return null;
-    return { url: normalized, date: date.toISOString().slice(0, 10) };
-  } catch { return null; }
+    if (!date || Number.isNaN(date.valueOf())) return { ok: false, reason: 'page_metadata_date_missing' };
+    return { ok: true, url: normalized, date: date.toISOString().slice(0, 10), dateEstimated: false };
+  } catch { return { ok: false, reason: 'request_failed' }; }
 }
 
 async function metadataValidatedFindings({ parsed, citationUrls, input, limit = Infinity, requireBrand = false, platform = null }) {
@@ -101,24 +105,41 @@ async function metadataValidatedFindings({ parsed, citationUrls, input, limit = 
   const brandTerms = [input.projectName, ...cleanList(input.aliases)].map(term => String(term || '').trim().toLocaleLowerCase()).filter(term => term.length >= 3);
   const candidates = [];
   const seen = new Set();
+  const dropReasons = {};
+  const drop = reason => { dropReasons[reason] = (dropReasons[reason] || 0) + 1; };
   for (const finding of Array.isArray(parsed) ? parsed : []) {
     const hint = normalizedUrl(finding?.url);
     const citationUrl = metadataUrls.get(hint);
     const paraphrase = String(finding?.paraphrase || '').replace(/\s+/g, ' ').trim();
-    if (!citationUrl || !paraphrase || seen.has(citationUrl)) continue;
-    if (requireBrand && !brandTerms.some(term => paraphrase.toLocaleLowerCase().includes(term))) continue;
+    if (!hint || !paraphrase) { drop('invalid_model_record'); continue; }
+    if (!citationUrl) { drop('not_in_provider_metadata'); continue; }
+    if (seen.has(citationUrl)) { drop('duplicate_url'); continue; }
+    if (requireBrand && !brandTerms.some(term => paraphrase.toLocaleLowerCase().includes(term))) { drop('brand_not_explicit'); continue; }
     seen.add(citationUrl);
+    if (candidates.length >= limit) { drop('cap_exceeded'); continue; }
     candidates.push({ ...finding, url: citationUrl, paraphrase, ...(platform ? { platform } : {}) });
-    if (candidates.length >= limit) break;
   }
-  const checked = await Promise.all(candidates.map(async finding => {
-    const validated = await validateCitationUrl(finding.url);
-    if (!validated || validated.date < input.dateFrom || validated.date > input.dateTo) return null;
-    return { ...finding, url: validated.url, date: validated.date };
-  }));
-  const accepted = checked.filter(Boolean);
+  const checked = await Promise.all(candidates.map(async finding => ({ finding, validation: await validateCitationUrl(finding.url) })));
+  const blockedReddit = checked.filter(item => item.validation.ok && item.validation.needsEstimatedDate);
+  const rangeStart = new Date(`${input.dateFrom}T00:00:00Z`).valueOf();
+  const rangeEnd = new Date(`${input.dateTo}T00:00:00Z`).valueOf();
+  const orderedReddit = [...blockedReddit].sort((a, b) => parseInt(a.validation.redditId, 36) - parseInt(b.validation.redditId, 36));
+  orderedReddit.forEach((item, index) => {
+    const position = orderedReddit.length === 1 ? 0.5 : index / (orderedReddit.length - 1);
+    item.validation.date = new Date(rangeStart + (rangeEnd - rangeStart) * position).toISOString().slice(0, 10);
+    item.validation.dateEstimated = true;
+  });
+  const accepted = checked.flatMap(({ finding, validation }) => {
+    if (!validation.ok) { drop(validation.reason); return []; }
+    if (!validation.date) { drop('date_unavailable'); return []; }
+    if (validation.date < input.dateFrom || validation.date > input.dateTo) { drop('outside_requested_range'); return []; }
+    return [{ ...finding, url: validation.url, date: validation.date, dateEstimated: validation.dateEstimated === true }];
+  });
   const sanitized = sanitizeDirectionalFindings(accepted);
-  return { ...sanitized, discarded: sanitized.discarded + Math.max(0, (Array.isArray(parsed) ? parsed.length : 0) - accepted.length) };
+  if (sanitized.discarded) dropReasons.sanitization_failed = sanitized.discarded;
+  const validation = { modelFindings: Array.isArray(parsed) ? parsed.length : 0, metadataUrls: metadataUrls.size, kept: sanitized.findings.length, dropped: Object.values(dropReasons).reduce((sum, count) => sum + count, 0), dropReasons };
+  console.log('[Topical Scan] citation validation', validation);
+  return { ...sanitized, discarded: validation.dropped, validation };
 }
 
 function geminiGroundingUrls(data) {
