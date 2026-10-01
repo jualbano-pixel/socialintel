@@ -4,7 +4,7 @@ import { requestOpenRouterChat } from '../../../lib/openrouter-api';
 import { requestGrokSearch } from '../../../lib/grok-api';
 import { calendarMonthWindows, cleanList, extractJson, filterMentionsToManilaRange, flagMentions, sanitizeDirectionalFindings, summarizeClassifications, validateTopicalScanInput } from '../../../lib/topical-scan';
 
-export const maxDuration = 800;
+export const maxDuration = 300;
 const CLAUDE_MODEL = 'claude-sonnet-4-6';
 const GEMINI_MODEL = 'gemini-3.6-flash';
 
