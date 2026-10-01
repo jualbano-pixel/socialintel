@@ -1,19 +1,13 @@
 // Claude API + Brand24 MCP
 // Brand24 OAuth is stored per Anthropic account — same API key = same connected Brand24
+import { attachClaudeMetadata, requestClaude } from '../../../lib/claude-api';
+
 export async function POST(request) {
   try {
     const body = await request.json();
     const brand24Token = process.env.BRAND24_TOKEN;
     const hasBrand24Token = brand24Token && !brand24Token.startsWith('your_');
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-        'anthropic-beta': 'mcp-client-2025-11-20',
-      },
-      body: JSON.stringify({
+    const result = await requestClaude({
         ...body,
         tools: [
           {
@@ -29,11 +23,10 @@ export async function POST(request) {
             ...(hasBrand24Token && { authorization_token: brand24Token }),
           },
         ],
-      }),
-    });
-    const data = await response.json();
+      }, { label: 'Claude Brand24 agent', anthropicHeaders: { 'anthropic-beta': 'mcp-client-2025-11-20' } });
+    const data = attachClaudeMetadata(result.data, result);
     console.log('Claude+B24 content types:', data.content?.map(b => b.type).join(', ') || data.error?.message);
-    return Response.json(data);
+    return Response.json(data, { status: result.status });
   } catch (e) {
     return Response.json({ error: e.message }, { status: 500 });
   }

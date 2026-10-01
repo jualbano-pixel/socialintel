@@ -76,6 +76,11 @@ function parseClaudeText(data) {
   return data?.content?.[0]?.text ?? data?.content?.find?.(b => b.type === 'text')?.text ?? null;
 }
 
+function recordClaudeProvider(data, label = 'Claude') {
+  if (typeof window === 'undefined' || !data?._signalIntel) return;
+  window.dispatchEvent(new CustomEvent('signal-intel-claude-provider', { detail: { ...data._signalIntel, label, at: new Date().toISOString() } }));
+}
+
 function brandKey(value) {
   return String(value || '')
     .toLowerCase()
@@ -170,7 +175,8 @@ async function claude(prompt, maxTokens = 600, fallback = {}) {
   try {
     const r = await fetch('/api/claude', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: CLAUDE_MODEL, max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] }) });
-    return maskVendorInObject(parseJSON(parseClaudeText(await r.json()) ?? '{}', fallback));
+    const data = await r.json(); recordClaudeProvider(data, 'Claude agent');
+    return maskVendorInObject(parseJSON(parseClaudeText(data) ?? '{}', fallback));
   } catch(e) { console.warn('Claude:', e.message); return fallback; }
 }
 
@@ -179,6 +185,7 @@ async function claudeText(prompt, maxTokens = 700, label = 'Ask AI') {
   console.log(`[${label}] /api/claude request`, payload);
   const r = await fetch('/api/claude', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
   const data = await r.json();
+  recordClaudeProvider(data, label);
   console.log(`[${label}] /api/claude response`, data);
   if (!r.ok || data.error) throw new Error(data.error?.message || data.error || `Claude request failed with ${r.status}`);
   const text = parseClaudeText(data);
@@ -191,6 +198,7 @@ async function claudeB24(prompt, maxTokens = 2200) {
     const r = await fetch('/api/claude-b24', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ model: CLAUDE_MODEL, max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] }) });
     const data = await r.json();
+    recordClaudeProvider(data, 'Brand24 Claude agent');
     if (!r.ok || data.error) console.warn('Claude+B24 API error:', data.error || r.status);
     const text = data.content?.filter(b => b.type === 'text').map(b => b.text).join('') ?? '';
     if (!text) console.warn('Claude+B24 empty text response:', data);
@@ -775,6 +783,7 @@ async function competitiveIntelLiteAgent(competitors, dateRange) {
       body: JSON.stringify(payload),
     });
     const data = await r.json();
+    recordClaudeProvider(data, 'Competitive Intel synthesis');
     console.log('[Competitive Intel Lite] /api/competitive-intel response', data);
     if (!r.ok || data.error) throw new Error(data.error || `Competitive Intel Lite failed with ${r.status}`);
     return data;
@@ -1502,6 +1511,18 @@ export default function SignalIntel() {
   const [uploadError, setUploadError] = useState('');
   const [uploadStatus, setUploadStatus] = useState('');
   const [manualData, setManualData] = useState(null);
+  const [claudeBackupUsed, setClaudeBackupUsed] = useState(false);
+  const [claudeRunLog, setClaudeRunLog] = useState([]);
+
+  useEffect(() => {
+    const onProvider = event => {
+      const detail = event.detail || {};
+      if (detail.claudeBackupUsed) setClaudeBackupUsed(true);
+      setClaudeRunLog(previous => [...previous, `${detail.label || 'Claude'} · ${detail.claudeProviderLabel || 'Claude direct'}`]);
+    };
+    window.addEventListener('signal-intel-claude-provider', onProvider);
+    return () => window.removeEventListener('signal-intel-claude-provider', onProvider);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -1645,7 +1666,7 @@ export default function SignalIntel() {
 
   const run = async (confirmedManualData = null) => {
     if (confirmedManualData?.nativeEvent || confirmedManualData?.preventDefault) confirmedManualData = null;
-    setStep('running'); setError(''); setAgents(IDLE); setOut({});
+    setStep('running'); setError(''); setAgents(IDLE); setOut({}); setClaudeBackupUsed(false); setClaudeRunLog([]);
     try {
       if (!brand.trim()) throw new Error('Enter a client / brand before running.');
       const effectivePeriod = confirmedManualData?.dateRange?.trim() || period;
@@ -2044,6 +2065,7 @@ Return a concise intelligence summary, recurring themes, specific public posts o
       <div style={{ width:'100%', maxWidth:500 }}>
         <div style={{ textAlign:'center', marginBottom:32 }}>
           <div style={{ color:LIME, fontFamily:"'JetBrains Mono',monospace", fontSize:10, letterSpacing:'0.2em', marginBottom:8 }}>PIPELINE · {done}/6 · LIVE MONITORING + GROK</div>
+          {claudeBackupUsed && <div style={{ display:'inline-block', marginBottom:8, border:'1px solid var(--accent-highlight-border)', borderRadius:5, padding:'5px 8px', color:'var(--accent-highlight)', fontFamily:"'JetBrains Mono',monospace", fontSize:10 }}>Claude via OpenRouter (backup)</div>}
           <h2 style={{ fontFamily:"'Barlow Condensed',sans-serif", fontSize:30, fontWeight:700, margin:'0 0 6px' }}>Analyzing {brand}</h2>
           <p style={{ color:'var(--text-faint)', fontSize:13 }}>{period}</p>
           <div style={{ marginTop:14, height:3, background:'var(--border-subtle)', borderRadius:2, maxWidth:280, margin:'14px auto 0' }}>
@@ -2051,6 +2073,7 @@ Return a concise intelligence summary, recurring themes, specific public posts o
           </div>
         </div>
         {AGENTS.map(a => <AgentPill key={a.key} agentKey={a.key} name={a.name} role={a.role} status={agents[a.key]}/>)}
+        {claudeRunLog.length > 0 && <div style={{ ...CARD, marginTop:10, padding:12 }}><div style={{ color:'var(--text-faint)', fontFamily:"'JetBrains Mono',monospace", fontSize:9, marginBottom:6 }}>RUN LOG</div>{claudeRunLog.map((line, index) => <div key={index} style={{ color:line.includes('(backup)')?'var(--accent-highlight)':'var(--text-muted)', fontSize:10, marginTop:3 }}>{line}</div>)}</div>}
       </div>
     </div>
   );
@@ -2066,6 +2089,7 @@ Return a concise intelligence summary, recurring themes, specific public posts o
             <div style={{ color:LIME, fontFamily:"'JetBrains Mono',monospace", fontSize:10, letterSpacing:'0.18em', marginBottom:6 }}>
               SOCIAL MONITORING REPORT · 6 AGENTS
             </div>
+            <div style={{ display:'inline-flex', marginBottom:7, border:`1px solid ${claudeBackupUsed?'var(--accent-highlight-border)':'var(--border)'}`, borderRadius:5, padding:'4px 7px', color:claudeBackupUsed?'var(--accent-highlight)':'var(--text-faint)', fontFamily:"'JetBrains Mono',monospace", fontSize:9 }}>{claudeBackupUsed ? 'Claude via OpenRouter (backup)' : 'Claude direct'}</div>
             <SourceAttribution hasB24={hasB24} hasGrok={hasGrok} competitiveLite={competitiveLite} manualVerified={manualVerified} uploadDate={displayMetrics.manualUploadDate} />
             <h1 style={{ fontFamily:"'Barlow Condensed',sans-serif", fontSize:36, fontWeight:700, margin:'0 0 4px' }}>{brand}</h1>
             <p style={{ color:'var(--text-muted)', fontSize:13, margin:0 }}>{period} · Prepared by Praxis Experiential</p>

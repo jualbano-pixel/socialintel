@@ -1,5 +1,6 @@
 import pdf from 'pdf-parse/lib/pdf-parse.js';
 import PDFParser from 'pdf2json';
+import { requestClaude } from '../../../lib/claude-api';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
@@ -245,14 +246,7 @@ export async function POST(request) {
     }
 
     console.log('[Brand24 PDF extract] calling Claude extraction');
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify({
+    const claudeResult = await requestClaude({
         model: 'claude-sonnet-4-6',
         max_tokens: 2500,
         messages: [{
@@ -284,25 +278,25 @@ Extract Top Mentions only from the uploaded PDF text. Do not reuse examples from
 PDF TEXT:
 ${extractedText.slice(0, 45000)}`,
         }],
-      }),
-    });
-    const data = await response.json();
-    diagnostics.push(`claudeStatus=${response.status}`);
+      }, { label: 'Monitoring PDF extraction' });
+    const data = claudeResult.data;
+    diagnostics.push(`claudeStatus=${claudeResult.status}`);
+    diagnostics.push(`claudeProvider=${claudeResult.usedBackup ? 'Claude via OpenRouter (backup)' : 'Claude direct'}`);
     console.log('[Brand24 PDF extract] Claude response', {
-      ok: response.ok,
-      status: response.status,
+      ok: claudeResult.ok,
+      status: claudeResult.status,
       error: data.error?.message || data.error || null,
       textChars: parseClaudeText(data)?.length || 0,
       textPreview: parseClaudeText(data)?.slice(0, 500) || '',
     });
-    if (!response.ok || data.error) {
+    if (!claudeResult.ok || data.error) {
       return buildFallbackResponse({
         file,
         extractedText,
         diagnostics,
         warning: {
           diagnostic: 'fallback=label-parser-after-claude-error',
-          message: `Claude extraction failed: ${data.error?.message || data.error || response.status}.`,
+          message: `Claude extraction failed: ${data.error?.message || data.error || claudeResult.status}.`,
         },
       });
     }

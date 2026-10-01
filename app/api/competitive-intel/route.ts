@@ -11,8 +11,8 @@
 // for competitors you're deliberately NOT giving a tracked monitor slot to.
 
 import { NextRequest, NextResponse } from 'next/server';
+import { claudeProviderMetadata, requestClaude } from '../../../lib/claude-api';
 
-const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY!;
 const XAI_API_KEY = process.env.XAI_API_KEY!;
 const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY!;
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY!;
@@ -195,17 +195,10 @@ function pullMetaAI(manualNotes?: string): SourcePull {
   };
 }
 
-async function synthesizeWithClaude(competitor: string, pulls: SourcePull[]): Promise<string> {
+async function synthesizeWithClaude(competitor: string, pulls: SourcePull[]): Promise<{ text: string; provider: any }> {
   const sourceBlock = pulls.map((p) => `### ${p.source}\n${p.themes}`).join('\n\n');
 
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': ANTHROPIC_API_KEY,
-      'anthropic-version': '2023-06-01',
-    },
-    body: JSON.stringify({
+  const result = await requestClaude({
       model: 'claude-sonnet-4-6',
       max_tokens: 1000,
       messages: [
@@ -226,10 +219,9 @@ Write a tight competitive intel summary (150-250 words) covering:
 End with one line making explicit: "This is directional signal from AI-native search, not audited live-monitoring mention data." Never present anything here as a precise count, percentage, or reach figure.`,
         },
       ],
-    }),
-  });
-  const data = await res.json();
-  return data?.content?.find((b: any) => b.type === 'text')?.text ?? '';
+    }, { label: 'Competitive Intel synthesis' });
+  if (!result.ok) throw new Error(result.data?.error?.message || `Claude synthesis failed (${result.status}).`);
+  return { text: result.data?.content?.find((b: any) => b.type === 'text')?.text ?? '', provider: claudeProviderMetadata(result) };
 }
 
 export async function POST(req: NextRequest) {
@@ -249,13 +241,14 @@ export async function POST(req: NextRequest) {
         const meta = pullMetaAI(c.metaAINotes);
         const pulls = [grok, perplexity, gemini, meta];
         const synthesis = await synthesizeWithClaude(c.name, pulls);
-        return { competitor: c.name, sources: pulls, synthesis };
+        return { competitor: c.name, sources: pulls, synthesis: synthesis.text, claudeProvider: synthesis.provider };
       })
     );
 
     return NextResponse.json({
       competitors: results,
       generatedAt: new Date().toISOString(),
+      _signalIntel: results.find(result => result.claudeProvider?.claudeBackupUsed)?.claudeProvider || results[0]?.claudeProvider,
     });
   } catch (err: any) {
     console.error('competitive-intel error:', err);

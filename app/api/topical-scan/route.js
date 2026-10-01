@@ -1,4 +1,5 @@
 import { getMentions, getMentionsReach, toClientSafeError } from '../../../lib/brand24-rest';
+import { claudeProviderMetadata, requestClaude } from '../../../lib/claude-api';
 import { cleanList, extractJson, flagMentions, sanitizeDirectionalFindings, summarizeClassifications, validateTopicalScanInput } from '../../../lib/topical-scan';
 
 export const maxDuration = 300;
@@ -13,30 +14,28 @@ async function readJson(response) {
 }
 
 async function claudeText(prompt, maxTokens = 4000) {
-  if (!configured(process.env.ANTHROPIC_API_KEY)) throw new Error('ANTHROPIC_API_KEY is not configured.');
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01' },
-    body: JSON.stringify({ model: CLAUDE_MODEL, max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] }),
-  });
-  const data = await readJson(response);
-  if (!response.ok) throw new Error(data?.error?.message || `Claude request failed (${response.status}).`);
-  return data?.content?.filter(block => block.type === 'text').map(block => block.text).join('') || '';
+  const result = await requestClaude({ model: CLAUDE_MODEL, max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] }, { label: 'Topical Scan classification' });
+  if (!result.ok) throw new Error(result.data?.error?.message || `Claude request failed (${result.status}).`);
+  return { text: result.data?.content?.filter(block => block.type === 'text').map(block => block.text).join('') || '', provider: claudeProviderMetadata(result) };
 }
 
 async function classify(flagged, themes, onProgress = () => {}) {
-  if (!flagged.length) return [];
+  if (!flagged.length) return { results: [], backupUsed: false };
   const results = [];
+  let backupUsed = false;
   const totalBatches = Math.ceil(flagged.length / 35);
   for (let offset = 0; offset < flagged.length; offset += 35) {
     const batchNumber = Math.floor(offset / 35) + 1;
     onProgress({ stage: 'classifying', message: `Classifying batch ${batchNumber} of ${totalBatches}`, current: batchNumber, total: totalBatches });
     const batch = flagged.slice(offset, offset + 35).map(item => ({ id: item.id, text: item.text, candidates: item.candidateThemeIndexes }));
-    const text = await claudeText(`Classify public social-listening mentions. Return ONLY a JSON array. Never repeat names, handles, account details, or personal amounts. Paraphrase neutrally. Themes are zero-indexed:\n${JSON.stringify(themes.map((theme, index) => ({ index, label: theme.label, description: theme.description })))}\n\nFor every input return {"id":"m1","relevant":true,"themeIndexes":[0],"stance":"complaint|advice-seeking|advice-giving|neutral|news","sentiment":"positive|neutral|negative|unknown","paraphrase":"anonymous paraphrase"}. Use relevant=false when it is not specifically about the stated theme. Mentions:\n${JSON.stringify(batch)}`, 5000);
-    const parsed = extractJson(text, []);
+    const claude = await claudeText(`Classify public social-listening mentions. Return ONLY a JSON array. Never repeat names, handles, account details, or personal amounts. Paraphrase neutrally. Themes are zero-indexed:\n${JSON.stringify(themes.map((theme, index) => ({ index, label: theme.label, description: theme.description })))}\n\nFor every input return {"id":"m1","relevant":true,"themeIndexes":[0],"stance":"complaint|advice-seeking|advice-giving|neutral|news","sentiment":"positive|neutral|negative|unknown","paraphrase":"anonymous paraphrase"}. Use relevant=false when it is not specifically about the stated theme. Mentions:\n${JSON.stringify(batch)}`, 5000);
+    backupUsed ||= claude.provider.claudeBackupUsed;
+    if (claude.provider.claudeBackupUsed) onProgress({ stage: 'provider', message: 'Claude via OpenRouter (backup)', provider: claude.provider });
+    const parsed = extractJson(claude.text, []);
     if (!Array.isArray(parsed)) throw new Error('Classification returned invalid JSON. No metrics were produced.');
     results.push(...parsed);
   }
-  return results;
+  return { results, backupUsed };
 }
 
 function directionalPrompt(input, theme, sourceLine) {
@@ -100,8 +99,8 @@ async function executeScan(input, onProgress = () => {}) {
     onProgress({ stage: 'filtering', message: 'Applying high-recall theme phrases and exclusions' });
     const flagged = flagMentions(mentionPull.mentions, input.themes, input.exclusions);
     onProgress({ stage: 'filtering', message: `${flagged.length} mentions flagged for classification` });
-    const classifications = await classify(flagged, input.themes, onProgress);
-    const verified = summarizeClassifications({ mentions: mentionPull.mentions, flagged, classifications, themes: input.themes, totalReach: reach.totalReach });
+    const classification = await classify(flagged, input.themes, onProgress);
+    const verified = summarizeClassifications({ mentions: mentionPull.mentions, flagged, classifications: classification.results, themes: input.themes, totalReach: reach.totalReach });
     onProgress({ stage: 'directional', message: `Checking three directional sources for ${input.themes.length} themes (maximum two concurrent)` });
     const tasks = input.themes.flatMap((theme, themeIndex) => [
       { themeIndex, source: 'Grok', run: () => pullGrok(input, theme) },
@@ -118,6 +117,8 @@ async function executeScan(input, onProgress = () => {}) {
     return {
       generatedAt: new Date().toISOString(), projectId: String(input.projectId), projectName: input.projectName || '', dateFrom: input.dateFrom, dateTo: input.dateTo,
       pull: { pages: mentionPull.pages, retrieved: mentionPull.mentions.length, expectedTotal, countMatchesExpected },
+      claudeProvider: classification.backupUsed ? 'Claude via OpenRouter (backup)' : 'Claude direct',
+      claudeBackupUsed: classification.backupUsed,
       verified, directional,
       coverageCaveat: 'Public monitoring cannot see closed Facebook groups, Messenger, Telegram, Viber, or other private conversations. Captured mentions are a floor, not all conversation.',
       privacyNote: 'Aggregate reporting only. Examples are paraphrased and identifying details are removed.',

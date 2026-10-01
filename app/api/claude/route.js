@@ -1,17 +1,10 @@
+import { attachClaudeMetadata, requestClaude } from '../../../lib/claude-api';
+
 export async function POST(request) {
   try {
     const body = await request.json();
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': process.env.ANTHROPIC_API_KEY,
-        'anthropic-version': '2023-06-01',
-      },
-      body: JSON.stringify(body),
-    });
-    const data = await response.json();
-    return Response.json(data);
+    const result = await requestClaude(body, { label: 'Claude agent' });
+    return Response.json(attachClaudeMetadata(result.data, result), { status: result.status });
   } catch (e) {
     return Response.json({ error: e.message }, { status: 500 });
   }
