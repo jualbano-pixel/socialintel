@@ -34,6 +34,36 @@ function StatusBadge({ status }) {
   return <span style={{ color, fontFamily: 'var(--font-mono)', fontSize: 10, textTransform: 'uppercase' }}>{status}</span>;
 }
 
+const QUAL_ENGINES = [
+  { id: 'grok', label: 'Grok via OpenRouter', kind: 'grok', model: 'x-ai/grok-4.7', enabled: true },
+  { id: 'gemini', label: 'Gemini grounded', kind: 'gemini', model: 'gemini-3.6-flash', enabled: true },
+  { id: 'sonar', label: 'Sonar via OpenRouter', kind: 'openrouter', model: 'perplexity/sonar-pro', enabled: true },
+];
+const qualKey = (brand, themes) => `signalintel:qual-plan:${String(brand || '').toLowerCase().trim()}:${themes.map(theme => theme.label).join('|').toLowerCase()}`;
+const monthsBefore = (date, months) => { const value = new Date(`${date}T00:00:00Z`); value.setUTCMonth(value.getUTCMonth() - Number(months || 24)); return value.toISOString().slice(0, 10); };
+const mergeQualFindings = findings => {
+  const merged = new Map();
+  findings.forEach(item => {
+    const current = merged.get(item.url) || { ...item, engines: [], themes: [] };
+    current.engines = [...new Set([...current.engines, item.engine])]; current.themes = [...new Set([...current.themes, item.theme])]; current.corroborated = current.engines.length >= 2;
+    merged.set(item.url, current);
+  });
+  return [...merged.values()].sort((a, b) => b.date.localeCompare(a.date));
+};
+
+function QualitativeReport({ qualitative, verifiedOnly, setVerified, showThirdParties }) {
+  if (!qualitative.findings.length && qualitative.phase !== 'complete') return null;
+  const findings = qualitative.findings.filter(item => !verifiedOnly || item.verified);
+  const row = item => <tr key={item.url}><td style={{ padding: 7 }}><input type="checkbox" checked={Boolean(item.verified)} onChange={event => setVerified(item.url, event.target.checked)} aria-label="Verified by analyst"/></td><td style={{ padding: 7, whiteSpace: 'nowrap' }}>{item.date}{item.dateEstimated ? ' (estimated)' : ''}</td><td style={{ padding: 7 }}>{item.platform}</td><td style={{ padding: 7 }}>{item.themes.join(', ')}</td><td style={{ padding: 7 }}>{showThirdParties ? item.paraphrase : item.clientParaphrase}</td><td style={{ padding: 7 }}>{item.engines.join(', ')}{item.corroborated ? ' · corroborated' : ''}</td><td style={{ padding: 7 }}><a href={item.url} target="_blank" rel="noreferrer" style={{ color: 'var(--accent-live)' }}>Source</a></td></tr>;
+  const table = (label, items) => <><h3 style={{ fontSize: 14, margin: '16px 0 7px' }}>{label}</h3>{items.length ? <div style={{ overflowX: 'auto' }}><table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 10 }}><thead><tr style={{ textAlign: 'left', borderBottom: '1px solid var(--border)' }}><th>Verified</th><th>Date</th><th>Platform</th><th>Theme(s)</th><th>Finding</th><th>Engines</th><th>Link</th></tr></thead><tbody>{items.map(row)}</tbody></table></div> : <p style={{ color: 'var(--text-muted)', fontSize: 11 }}>None found.</p>}</>;
+  return <section style={{ marginTop: 24 }}><h2 style={{ fontSize: 18, marginBottom: 4 }}>Qualitative Layer</h2><p style={{ color: 'var(--accent-highlight)', fontSize: 11 }}>Directional — public-source discovery, not volume.</p>
+    {table('In review period', findings.filter(item => item.band === 'In review period'))}{table('Older but still public', findings.filter(item => item.band === 'Older but still public'))}
+    <h3 style={{ fontSize: 14, margin: '18px 0 8px' }}>Per-theme synthesis</h3>{Object.entries(qualitative.synthesis).map(([theme, value]) => <article key={theme} style={{ ...CARD, marginBottom: 10 }}><strong>{theme} · {value.signalStrength || 'None found'}</strong><p style={{ fontSize: 11, lineHeight: 1.5, marginTop: 6 }}><b>In period:</b> {value.inPeriod || 'None found.'}</p><p style={{ fontSize: 11, lineHeight: 1.5 }}><b>Older:</b> {value.older || 'None found.'}</p>{value.narratives?.length > 0 && <p style={{ fontSize: 11 }}><b>Recurring narratives:</b> {value.narratives.join('; ')}</p>}{value.counterexamples?.length > 0 && <p style={{ fontSize: 11 }}><b>Counterexamples:</b> {value.counterexamples.join('; ')}</p>}{value.riskFlags?.length > 0 && <p style={{ fontSize: 11, color: 'var(--accent-negative)' }}><b>Risk flags:</b> {value.riskFlags.join('; ')}</p>}</article>)}
+    <h3 style={{ fontSize: 14, margin: '18px 0 8px' }}>Source appendix</h3><ol style={{ paddingLeft: 20 }}>{findings.map(item => <li key={`appendix-${item.url}`} style={{ fontSize: 10, lineHeight: 1.55, marginBottom: 9 }}>{item.date}{item.dateEstimated ? ' (estimated)' : ''} · {item.themes.join(', ')} · {showThirdParties ? item.paraphrase : item.clientParaphrase}<br/><a href={item.url} target="_blank" rel="noreferrer" style={{ color: 'var(--accent-live)', overflowWrap: 'anywhere' }}>{item.url}</a></li>)}</ol>
+    <section style={{ ...CARD, marginTop: 14, background: 'var(--bg-surface-subtle)' }}><h3 style={{ fontSize: 12 }}>Qualitative method</h3><p style={{ fontSize: 10, lineHeight: 1.55, marginTop: 5 }}>URLs come only from provider citation metadata and are validated server-side. Dates come from platform identifiers, Reddit metadata, or publisher metadata; estimates are marked. {qualitative.findings.filter(item => item.verified).length} of {qualitative.findings.length} retained findings were analyst-verified. Posts are user claims, not verified account data or company policy. Co-occurrence with business news is not causation. No volume inference is made.</p></section>
+  </section>;
+}
+
 export default function TopicalScan() {
   const reportRef = useRef(null);
   const [projects, setProjects] = useState([]);
@@ -44,6 +74,12 @@ export default function TopicalScan() {
   const [result, setResult] = useState(null);
   const [pdfLoading, setPdfLoading] = useState(false);
   const [progress, setProgress] = useState([]);
+  const [qualitative, setQualitative] = useState({ phase: 'idle', plan: null, planText: '', findings: [], synthesis: {}, logs: [], errors: [] });
+  const [qualLookback, setQualLookback] = useState(24);
+  const [qualEngines, setQualEngines] = useState(QUAL_ENGINES);
+  const [qualBusy, setQualBusy] = useState(false);
+  const [verifiedOnly, setVerifiedOnly] = useState(true);
+  const [showThirdParties, setShowThirdParties] = useState(false);
 
   useEffect(() => {
     fetch('/api/tracking/projects').then(async response => {
@@ -58,6 +94,48 @@ export default function TopicalScan() {
   const setTheme = (index, key, value) => setForm(previous => ({ ...previous, themes: previous.themes.map((theme, themeIndex) => themeIndex === index ? { ...theme, [key]: value } : theme) }));
   const removeTheme = index => setForm(previous => ({ ...previous, themes: previous.themes.filter((_, themeIndex) => themeIndex !== index) }));
   const addTheme = () => setForm(previous => ({ ...previous, themes: [...previous.themes, { label: '', description: '', phrases: '', manualNotes: '' }] }));
+
+  const qualPayload = () => ({ brand: selectedProject?.name || selectedProject?.project_name || form.projectName || form.aliases.split('\n').find(Boolean) || 'Selected brand', market: 'Philippines', aliases: form.aliases.split('\n').filter(Boolean), exclusions: form.exclusions.split('\n').filter(Boolean), themes: form.themes.map(theme => ({ ...theme, phrases: theme.phrases.split('\n').filter(Boolean) })), dateFrom: form.dateFrom, dateTo: form.dateTo, lookbackFrom: monthsBefore(form.dateFrom, qualLookback), cap: 8, engines: qualEngines });
+  async function qualRequest(payload) { const response = await fetch('/api/topical-scan/qualitative', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Qualitative layer request failed.'); return data; }
+  const addQualLog = item => setQualitative(previous => ({ ...previous, logs: [...previous.logs, item] }));
+
+  async function startQualitative() {
+    setQualBusy(true); setError(''); setQualitative({ phase: 'planning', plan: null, planText: '', findings: [], synthesis: {}, logs: [], errors: [] });
+    try {
+      const base = qualPayload(); const planned = await qualRequest({ action: 'planner', ...base }); let plan = planned.plan;
+      addQualLog({ step: 'Planner', runtimeMs: planned.runtimeMs, costUsd: null });
+      const themes = [];
+      for (let index = 0; index < plan.themes.length; index += 1) {
+        const theme = plan.themes[index]; setQualitative(previous => ({ ...previous, phase: `discovery ${index + 1}/${plan.themes.length}` }));
+        const discovery = await qualRequest({ action: 'discovery', ...base, plan, theme }); discovery.logs.forEach(log => addQualLog({ step: `Discovery · ${theme.label}`, ...log }));
+        const venues = new Map((theme.venues || []).map(item => [item.venue.toLowerCase(), item])); discovery.venues.forEach(item => venues.set(item.venue.toLowerCase(), { ...(venues.get(item.venue.toLowerCase()) || {}), ...item }));
+        themes.push({ ...theme, venues: [...venues.values()] });
+      }
+      plan = { ...plan, themes }; setQualitative(previous => ({ ...previous, phase: 'review', plan, planText: JSON.stringify(plan, null, 2) }));
+    } catch (err) { setError(err.message); setQualitative(previous => ({ ...previous, phase: 'error' })); } finally { setQualBusy(false); }
+  }
+
+  function loadPlan() {
+    try { const saved = localStorage.getItem(qualKey(selectedProject?.name || form.projectName, form.themes)); if (!saved) throw new Error('No saved approved plan for this brand and topic.'); const plan = JSON.parse(saved); setQualitative(previous => ({ ...previous, phase: 'review', plan, planText: JSON.stringify(plan, null, 2) })); }
+    catch (err) { setError(err.message); }
+  }
+
+  async function approveAndRun() {
+    setQualBusy(true); setError('');
+    try {
+      const plan = JSON.parse(qualitative.planText); localStorage.setItem(qualKey(selectedProject?.name || form.projectName, form.themes), JSON.stringify(plan)); setQualitative(previous => ({ ...previous, phase: 'targeted', plan, findings: [], synthesis: {} }));
+      const base = qualPayload(); const collected = []; const errors = [];
+      for (let themeIndex = 0; themeIndex < plan.themes.length; themeIndex += 1) for (let engineIndex = 0; engineIndex < qualEngines.filter(engine => engine.enabled).length; engineIndex += 1) {
+        const engine = qualEngines.filter(item => item.enabled)[engineIndex]; const theme = plan.themes[themeIndex]; setQualitative(previous => ({ ...previous, phase: `targeted ${themeIndex + 1}/${plan.themes.length} · ${engine.label}` }));
+        try { const data = await qualRequest({ action: 'targeted', ...base, plan, theme, engineId: engine.id }); collected.push(...data.findings); addQualLog({ step: `Targeted · ${theme.label}`, ...data.log, validation: data.validation }); }
+        catch (err) { errors.push({ theme: theme.label, engine: engine.label, error: err.message }); addQualLog({ step: `Targeted · ${theme.label}`, engine: engine.label, error: err.message }); }
+      }
+      const merged = mergeQualFindings(collected); const synthesis = {};
+      for (let index = 0; index < plan.themes.length; index += 1) { const theme = plan.themes[index]; setQualitative(previous => ({ ...previous, phase: `synthesis ${index + 1}/${plan.themes.length}` })); const data = await qualRequest({ action: 'synthesis', theme, findings: merged.filter(item => item.themes.includes(theme.label)) }); synthesis[theme.label] = data.synthesis; addQualLog({ step: `Synthesis · ${theme.label}`, runtimeMs: data.runtimeMs, costUsd: null }); }
+      setQualitative(previous => ({ ...previous, phase: 'complete', plan, findings: merged, synthesis, errors }));
+    } catch (err) { setError(err.message); setQualitative(previous => ({ ...previous, phase: 'error' })); } finally { setQualBusy(false); }
+  }
+  const setFindingVerified = (url, verified) => setQualitative(previous => ({ ...previous, findings: previous.findings.map(item => item.url === url ? { ...item, verified } : item) }));
 
   async function runScan(event) {
     event.preventDefault(); setLoading(true); setError(''); setResult(null); setProgress([]);
@@ -133,6 +211,16 @@ export default function TopicalScan() {
         {(loading || progress.length > 0) && <section style={{ ...CARD, padding: 14 }}><div style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-live)', fontSize: 10, marginBottom: 8 }}>RUN LOG · {loading ? 'IN PROGRESS' : error ? 'STOPPED' : 'COMPLETE'}</div><div style={{ display: 'grid', gap: 5 }}>{progress.map((item, index) => <div key={`${item.at}-${index}`} style={{ color: index === progress.length - 1 ? 'var(--text-primary)' : 'var(--text-muted)', fontSize: 11 }}><span style={{ color: 'var(--text-faint)', fontFamily: 'var(--font-mono)' }}>{item.stage}</span> · {item.message}</div>)}</div></section>}
       </form>
 
+      <section style={{ ...CARD, marginTop: 22, borderTop: '4px solid var(--accent-highlight)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'flex-start' }}><div><h2 style={{ fontSize: 18 }}>Qualitative Layer</h2><p style={{ color: 'var(--text-muted)', fontSize: 11, lineHeight: 1.5, marginTop: 5 }}>Separate public-source discovery. It can run with or without a Brand24 pull and makes no volume claims.</p></div><span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-highlight)', fontSize: 10 }}>{qualitative.phase.toUpperCase()}</span></div>
+        <div style={{ display: 'grid', gridTemplateColumns: '160px 1fr', gap: 12, marginTop: 14 }}><label style={{ fontSize: 11, color: 'var(--text-muted)' }}>Lookback before start (months)<input type="number" min="0" max="60" value={qualLookback} onChange={event => setQualLookback(event.target.value)} style={{ ...INPUT, marginTop: 5 }}/></label><div><div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Configured engines</div><div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>{qualEngines.map(engine => <label key={engine.id} style={{ fontSize: 11 }}><input type="checkbox" checked={engine.enabled} onChange={event => setQualEngines(previous => previous.map(item => item.id === engine.id ? { ...item, enabled: event.target.checked } : item))}/> {engine.label}</label>)}</div></div></div>
+        <div style={{ display: 'flex', gap: 8, marginTop: 14 }}><button type="button" disabled={qualBusy} onClick={startQualitative} style={{ ...INPUT, width: 'auto', background: 'var(--accent-highlight)', color: 'var(--text-on-accent)', cursor: qualBusy ? 'wait' : 'pointer' }}>{qualBusy ? 'Running step…' : 'Run qualitative layer (empty plan)'}</button><button type="button" disabled={qualBusy} onClick={loadPlan} style={{ ...INPUT, width: 'auto' }}>Load saved plan</button></div>
+        {qualitative.phase === 'review' && <div style={{ marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 14 }}><h3 style={{ fontSize: 14 }}>Analyst review required</h3><p style={{ color: 'var(--text-muted)', fontSize: 11, margin: '5px 0 8px' }}>Edit aliases, exclusions, queries, and venues as JSON. No targeted search runs until you approve.</p><textarea value={qualitative.planText} onChange={event => setQualitative(previous => ({ ...previous, planText: event.target.value }))} rows={18} style={{ ...INPUT, fontFamily: 'var(--font-mono)', fontSize: 10, resize: 'vertical' }}/><button type="button" onClick={approveAndRun} disabled={qualBusy} style={{ ...INPUT, width: 'auto', marginTop: 8, background: 'var(--accent-live)', color: 'var(--text-on-accent)' }}>Approve plan and run targeted pass</button></div>}
+        {qualitative.logs.length > 0 && <details style={{ marginTop: 12 }} open={qualBusy}><summary style={{ cursor: 'pointer', fontSize: 11, color: 'var(--accent-live)' }}>Internal run log · cost and runtime</summary><div style={{ display: 'grid', gap: 4, marginTop: 7 }}>{qualitative.logs.map((log, index) => <div key={index} style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-muted)' }}>{log.step} · {log.engine || 'Claude'} · {(Number(log.runtimeMs || 0) / 1000).toFixed(1)}s · cost {log.costUsd == null ? 'not returned' : `$${Number(log.costUsd).toFixed(6)}`}{log.validation ? ` · kept ${log.validation.kept}, dropped ${log.validation.dropped} (${Object.entries(log.validation.dropReasons || {}).map(([reason, count]) => `${reason}:${count}`).join(', ') || 'none'})` : ''}{log.error ? ` · ${log.error}` : ''}</div>)}</div></details>}
+        {qualitative.phase === 'complete' && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, marginTop: 13, paddingTop: 12, borderTop: '1px solid var(--border)' }}><label style={{ fontSize: 11 }}>Client/PDF findings <select value={verifiedOnly ? 'verified' : 'all'} onChange={event => setVerifiedOnly(event.target.value === 'verified')} style={{ ...INPUT, width: 'auto', marginLeft: 6 }}><option value="verified">Verified only (default)</option><option value="all">All retained</option></select></label><label style={{ fontSize: 11 }}><input type="checkbox" checked={showThirdParties} onChange={event => setShowThirdParties(event.target.checked)}/> Show third-party company names</label><span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{qualitative.findings.length} unique retained · {qualitative.findings.filter(item => item.corroborated).length} corroborated</span></div>}
+        {!result && qualitative.phase === 'complete' && <QualitativeReport qualitative={qualitative} verifiedOnly={verifiedOnly} setVerified={setFindingVerified} showThirdParties={showThirdParties}/>}
+      </section>
+
       {result && <div style={{ marginTop: 36 }}>
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}><button onClick={exportPdf} disabled={pdfLoading} style={{ ...INPUT, width: 'auto', cursor: 'pointer' }}>{pdfLoading ? 'Rendering…' : 'Export PDF'}</button></div>
         <div ref={reportRef} style={{ background: 'var(--bg-primary)', padding: 2 }}>
@@ -149,6 +237,7 @@ export default function TopicalScan() {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 18, marginTop: 18 }}><div><h4 style={{ fontSize: 11, marginBottom: 9 }}>Platforms</h4><Bars values={theme.platforms}/></div><div><h4 style={{ fontSize: 11, marginBottom: 9 }}>Stance</h4><Bars values={theme.stances}/></div><div><h4 style={{ fontSize: 11, marginBottom: 9 }}>Monthly trend</h4><MonthlyTrend values={theme.monthly}/></div></div>
             <details style={{ marginTop: 16 }}><summary style={{ cursor: 'pointer', fontSize: 12, color: 'var(--accent-live)' }}>Review sample ({theme.reviewSample.length}; paraphrased)</summary><div style={{ display: 'grid', gap: 8, marginTop: 10 }}>{theme.reviewSample.map(item => <div key={item.id} style={{ borderLeft: '2px solid var(--border-strong)', paddingLeft: 10, fontSize: 11, lineHeight: 1.5 }}><span style={{ color: 'var(--text-faint)' }}>{item.platform} · {item.stance} · {item.sentiment}</span><p>{item.paraphrase}</p>{item.url && <a href={item.url} target="_blank" rel="noreferrer" style={{ color: 'var(--accent-live)' }}>Open source</a>}</div>)}</div></details>
           </section>)}
+          <QualitativeReport qualitative={qualitative} verifiedOnly={verifiedOnly} setVerified={setFindingVerified} showThirdParties={showThirdParties}/>
           <h2 style={{ fontSize: 18, margin: '24px 0 10px' }}>Directional Intelligence <span style={{ color: 'var(--text-faint)', fontWeight: 400, fontSize: 11 }}>cited public-source discovery · not volume</span></h2>
           {result.directional.map(theme => <section key={theme.label} style={{ ...CARD, marginBottom: 12 }}><h3 style={{ fontSize: 16, marginBottom: 12 }}>{theme.label}</h3>{theme.sources.map(source => <div key={source.source} style={{ borderTop: '1px solid var(--border-subtle)', padding: '10px 0' }}><div style={{ display: 'flex', justifyContent: 'space-between' }}><strong style={{ fontSize: 12 }}>{source.source}</strong><StatusBadge status={source.status}/></div>{source.status === 'unavailable' && <p style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 5 }}>{source.source} unavailable this run.</p>}{source.discarded > 0 && <p style={{ color: 'var(--accent-highlight)', fontSize: 10 }}>{source.discarded} unverified, uncited, undated, or out-of-range finding(s) discarded.</p>}{source.status === 'complete' && !source.findings.length && <p style={{ color: 'var(--text-muted)', fontSize: 11, marginTop: 5 }}>No brand-specific cited signal found.</p>}{source.findings.map(finding => <p key={finding.url} style={{ fontSize: 11, lineHeight: 1.5, marginTop: 7 }}><span style={{ color: 'var(--text-faint)', fontFamily: 'var(--font-mono)' }}>{finding.date}{finding.dateEstimated ? ' (estimated)' : ''}</span> · {finding.paraphrase} <a href={finding.url} target="_blank" rel="noreferrer" style={{ color: 'var(--accent-live)' }}>Source</a></p>)}</div>)}{theme.manualNotes && <div style={{ borderTop: '1px solid var(--border-subtle)', paddingTop: 10 }}><strong style={{ fontSize: 12 }}>Manual public-Facebook notes</strong><p style={{ fontSize: 11, lineHeight: 1.5, marginTop: 5 }}>{theme.manualNotes}</p></div>}</section>)}
           <h2 style={{ fontSize: 18, margin: '24px 0 10px' }}>Appendix · AI Source Audit</h2>
