@@ -28,7 +28,7 @@ const PLAN_SCHEMA = {
     exclusions: { type: 'array', items: { type: 'string' } },
     themes: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['label', 'queries', 'venues'], properties: {
       label: { type: 'string' }, queries: { type: 'array', minItems: 3, maxItems: 5, items: { type: 'string' } },
-      venues: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['venue', 'type', 'reason', 'discovered'], properties: { venue: { type: 'string' }, type: { type: 'string', enum: ['domain', 'subreddit', 'forum', 'platform', 'news outlet'] }, reason: { type: 'string' }, discovered: { type: 'boolean' } } } },
+      venues: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['venue', 'type', 'reason', 'discovered', 'source'], properties: { venue: { type: 'string' }, type: { type: 'string', enum: ['domain', 'subreddit', 'forum', 'platform', 'news outlet'] }, reason: { type: 'string' }, discovered: { type: 'boolean' }, source: { type: 'string', enum: ['planner'] } } } },
     } } },
   },
 };
@@ -108,6 +108,15 @@ function venueFor(url) {
   const path = parsed.pathname.split('/').filter(Boolean).slice(0, 2).join('/');
   if (/(facebook|instagram|threads)\.com$/.test(host) && path) return { venue: `${host}/${path}`, type: 'page/path' };
   return { venue: host, type: 'domain' };
+}
+
+async function resolveProviderUrl(url) {
+  const normalized = normalizeUrl(url); if (!normalized) return '';
+  if (!/vertexaisearch\.cloud\.google\.com$/i.test(new URL(normalized).hostname)) return normalized;
+  try {
+    const response = await fetch(normalized, { redirect: 'follow', signal: AbortSignal.timeout(10000), headers: { 'User-Agent': 'SignalIntelCitationResolver/1.0' } });
+    const resolved = normalizeUrl(response.url); return resolved && !/vertexaisearch\.cloud\.google\.com$/i.test(new URL(resolved).hostname) ? resolved : '';
+  } catch { return ''; }
 }
 
 function xDate(url) {
@@ -199,7 +208,7 @@ function engineList(input) {
 }
 
 function plannerPrompt(input) {
-  return `You are a Philippine social-listening search planner. Use the build_search_plan tool. Inputs: brand ${input.brand}; market ${input.market || 'Philippines'}; aliases ${JSON.stringify(input.aliases)}; exclusions ${JSON.stringify(input.exclusions)}; themes ${JSON.stringify(input.themes)}. Refine aliases and exclusions. Produce 3–5 useful query variants per theme, including relevant Philippine local-language or slang variants. Suggest candidate public venues based on research judgment and explain each. Do not invent URLs and do not include findings. Venues must be generated from these inputs, not a fixed template.`;
+  return `You are a Philippine social-listening search planner. Use the build_search_plan tool. Inputs: brand ${input.brand}; market ${input.market || 'Philippines'}; aliases ${JSON.stringify(input.aliases)}; exclusions ${JSON.stringify(input.exclusions)}; themes ${JSON.stringify(input.themes)}. Refine aliases and exclusions. Produce 3–5 short natural-language search phrases per theme, including Philippine local-language or slang variants. Never use Boolean OR/AND syntax, quotes, parentheses, or site: operators. Good patterns are like "EastWest amnesty offer reddit" and "EastWest credit card restructuring utangPH". Suggest candidate public venues based on research judgment, set source to planner and discovered to false, and explain each. Do not invent URLs or findings. Venues must be generated from these inputs, not a fixed template.`;
 }
 
 function discoveryPrompt(input, theme) {
@@ -209,7 +218,7 @@ function discoveryPrompt(input, theme) {
 function targetPrompt(input, theme) {
   const venues = (theme.venues || []).map(item => item.venue).filter(Boolean);
   const queries = (theme.queries || []).slice(0, 5);
-  return `Search public sources for specific posts/articles about ${input.brand} in ${input.market}, from ${input.lookbackFrom} through ${input.dateTo}. Theme: ${theme.label}. Approved queries: ${queries.join(' | ')}. Approved venues: ${venues.join(', ') || 'none; search broadly'}. Generate site-targeted variants from those approved venues and run them. Return ONLY a JSON array with at most ${input.cap || 8} records: {"url":"exact cited URL","paraphrase":"one sentence explicitly naming the brand and describing that item","clientParaphrase":"same sentence but replace third-party company names with their generic role","platform":"..."}. No usernames, handles, personal names, account details, personal amounts, volume claims, or uncited URLs. Include only items explicitly about the brand. URLs in the JSON are matching hints only; the server accepts a URL solely when it appears in provider citation metadata.`;
+  return `Search public sources for specific posts/articles about ${input.brand} in ${input.market}, from ${input.lookbackFrom} through ${input.dateTo}. Theme: ${theme.label}. Approved short natural-language queries: ${queries.join(' | ')}. Approved venues: ${venues.join(', ') || 'none; search broadly'}. Refer to venues naturally in queries; do not use Boolean OR/AND syntax or site: operators. Return ONLY a JSON array with at most ${input.cap || 8} records: {"url":"exact cited URL","paraphrase":"one sentence explicitly naming the brand and describing that item","clientParaphrase":"same sentence but replace third-party company names with their generic role","platform":"..."}. No usernames, handles, personal names, account details, personal amounts, volume claims, or uncited URLs. Include only items explicitly about the brand. URLs in the JSON are matching hints only; the server accepts a URL solely when it appears in provider citation metadata.`;
 }
 
 async function validateFindings(raw, citations, input, engine) {
@@ -252,14 +261,17 @@ export async function POST(request) {
     if (action === 'discovery') {
       const theme = input.theme; if (!theme?.label) return jsonError('Missing theme.');
       const engine = DEFAULT_ENGINES.find(item => item.id === 'gemini'); const counts = new Map(); const logs = []; const errors = [];
-      try { const result = await runEngine(engine, discoveryPrompt(input, theme), { cap: input.cap }); logs.push(result.log); result.citationUrls.forEach(url => { const venue = venueFor(url); const current = counts.get(venue.venue) || { ...venue, hitCount: 0, reason: 'Discovered from a provider-cited URL', discovered: true }; current.hitCount += 1; counts.set(venue.venue, current); }); }
+      try { const result = await runEngine(engine, discoveryPrompt(input, theme), { cap: input.cap }); logs.push(result.log); const resolvedUrls = await Promise.all(result.citationUrls.map(resolveProviderUrl)); resolvedUrls.filter(Boolean).forEach(url => { const venue = venueFor(url); if (/vertexaisearch/i.test(venue.venue)) return; const current = counts.get(venue.venue) || { ...venue, hitCount: 0, reason: 'Discovered from a resolved provider-cited URL', discovered: true, source: 'discovered' }; current.hitCount += 1; counts.set(venue.venue, current); }); }
       catch (error) { errors.push({ engine: engine.label, error: error.message }); logs.push({ engine: engine.label, runtimeMs: Date.now() - started, costUsd: null, error: error.message }); throw error; }
       return Response.json({ venues: [...counts.values()].sort((a, b) => b.hitCount - a.hitCount), logs, errors, runtimeMs: Date.now() - started });
     }
     if (action === 'targeted-search') {
       const engine = engineList(input).find(item => item.id === input.engineId); if (!engine) return jsonError('Unknown or disabled engine.');
       const result = await runEngine(engine, targetPrompt(input, input.theme), { cap: input.cap });
-      return Response.json({ searchText: result.text, citationUrls: result.citationUrls, log: result.log, runtimeMs: Date.now() - started });
+      const pairs = await Promise.all(result.citationUrls.map(async url => [url, await resolveProviderUrl(url)]));
+      const citationUrls = [...new Set(pairs.map(([, resolved]) => resolved).filter(Boolean))]; let searchText = result.text;
+      pairs.forEach(([original, resolved]) => { if (resolved && original !== resolved) searchText = searchText.split(original).join(resolved); });
+      return Response.json({ searchText, citationUrls, log: result.log, runtimeMs: Date.now() - started });
     }
     if (action === 'targeted-structure') {
       const engine = engineList(input).find(item => item.id === input.engineId); if (!engine) return jsonError('Unknown or disabled engine.');
