@@ -96,23 +96,44 @@ export default function TopicalScan() {
   const addTheme = () => setForm(previous => ({ ...previous, themes: [...previous.themes, { label: '', description: '', phrases: '', manualNotes: '' }] }));
 
   const qualPayload = () => ({ brand: selectedProject?.name || selectedProject?.project_name || form.projectName || form.aliases.split('\n').find(Boolean) || 'Selected brand', market: 'Philippines', aliases: form.aliases.split('\n').filter(Boolean), exclusions: form.exclusions.split('\n').filter(Boolean), themes: form.themes.map(theme => ({ ...theme, phrases: theme.phrases.split('\n').filter(Boolean) })), dateFrom: form.dateFrom, dateTo: form.dateTo, lookbackFrom: monthsBefore(form.dateFrom, qualLookback), cap: 8, engines: qualEngines });
-  async function qualRequest(payload) { const response = await fetch('/api/topical-scan/qualitative', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); const data = await response.json(); if (!response.ok) throw new Error(data.error || 'Qualitative layer request failed.'); return data; }
+  async function qualRequest(payload) { const response = await fetch('/api/topical-scan/qualitative', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); const data = await response.json(); if (!response.ok) { const error = new Error(data.error || 'Qualitative layer request failed.'); error.rawOutput = data.rawOutput || ''; throw error; } return data; }
   const addQualLog = item => setQualitative(previous => ({ ...previous, logs: [...previous.logs, item] }));
+
+  function emptyPlan() {
+    const base = qualPayload();
+    return { aliases: base.aliases, exclusions: base.exclusions, themes: base.themes.map(theme => ({ label: theme.label, queries: (theme.phrases || []).slice(0, 5), venues: [] })) };
+  }
+
+  async function runDiscovery(plan, base = qualPayload()) {
+    const themes = [];
+    for (let index = 0; index < plan.themes.length; index += 1) {
+      const theme = plan.themes[index]; setQualitative(previous => ({ ...previous, phase: `discovery ${index + 1}/${plan.themes.length}` }));
+      const discovery = await qualRequest({ action: 'discovery', ...base, plan, theme }); discovery.logs.forEach(log => addQualLog({ step: `Discovery · ${theme.label}`, ...log }));
+      const venues = new Map((theme.venues || []).map(item => [item.venue.toLowerCase(), item])); discovery.venues.forEach(item => venues.set(item.venue.toLowerCase(), { ...(venues.get(item.venue.toLowerCase()) || {}), ...item }));
+      themes.push({ ...theme, venues: [...venues.values()] });
+    }
+    const discoveredPlan = { ...plan, themes }; setQualitative(previous => ({ ...previous, phase: 'review', plan: discoveredPlan, planText: JSON.stringify(discoveredPlan, null, 2), plannerError: '' }));
+  }
 
   async function startQualitative() {
     setQualBusy(true); setError(''); setQualitative({ phase: 'planning', plan: null, planText: '', findings: [], synthesis: {}, logs: [], errors: [] });
+    const base = qualPayload(); let planned;
     try {
-      const base = qualPayload(); const planned = await qualRequest({ action: 'planner', ...base }); let plan = planned.plan;
-      addQualLog({ step: 'Planner', runtimeMs: planned.runtimeMs, costUsd: null });
-      const themes = [];
-      for (let index = 0; index < plan.themes.length; index += 1) {
-        const theme = plan.themes[index]; setQualitative(previous => ({ ...previous, phase: `discovery ${index + 1}/${plan.themes.length}` }));
-        const discovery = await qualRequest({ action: 'discovery', ...base, plan, theme }); discovery.logs.forEach(log => addQualLog({ step: `Discovery · ${theme.label}`, ...log }));
-        const venues = new Map((theme.venues || []).map(item => [item.venue.toLowerCase(), item])); discovery.venues.forEach(item => venues.set(item.venue.toLowerCase(), { ...(venues.get(item.venue.toLowerCase()) || {}), ...item }));
-        themes.push({ ...theme, venues: [...venues.values()] });
-      }
-      plan = { ...plan, themes }; setQualitative(previous => ({ ...previous, phase: 'review', plan, planText: JSON.stringify(plan, null, 2) }));
-    } catch (err) { setError(err.message); setQualitative(previous => ({ ...previous, phase: 'error' })); } finally { setQualBusy(false); }
+      planned = await qualRequest({ action: 'planner', ...base });
+      addQualLog({ step: 'Planner', runtimeMs: planned.runtimeMs, costUsd: null, provider: planned.provider, stopReason: planned.stopReason });
+    } catch (err) {
+      const reason = err.message || 'Unknown error'; setQualitative(previous => ({ ...previous, phase: 'planner-failed', plannerError: reason, logs: [...previous.logs, { step: 'Planner failed', error: reason, rawOutput: err.rawOutput || '' }] })); setQualBusy(false); return;
+    }
+    try { await runDiscovery(planned.plan, base); }
+    catch (err) { setError(err.message); setQualitative(previous => ({ ...previous, phase: 'error', logs: [...previous.logs, { step: 'Discovery failed', error: err.message, rawOutput: err.rawOutput || '' }] })); }
+    finally { setQualBusy(false); }
+  }
+
+  async function skipPlanner() {
+    setQualBusy(true); setError(''); const plan = emptyPlan();
+    setQualitative(previous => ({ ...previous, phase: 'discovery', plannerError: '', plan, planText: '', findings: [], synthesis: {} }));
+    addQualLog({ step: 'Planner', error: 'Skipped by analyst; discovery started from the input aliases, exclusions, themes, and phrase lists.' });
+    try { await runDiscovery(plan); } catch (err) { setError(err.message); setQualitative(previous => ({ ...previous, phase: 'error', logs: [...previous.logs, { step: 'Discovery failed', error: err.message, rawOutput: err.rawOutput || '' }] })); } finally { setQualBusy(false); }
   }
 
   function loadPlan() {
@@ -214,9 +235,10 @@ export default function TopicalScan() {
       <section style={{ ...CARD, marginTop: 22, borderTop: '4px solid var(--accent-highlight)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, alignItems: 'flex-start' }}><div><h2 style={{ fontSize: 18 }}>Qualitative Layer</h2><p style={{ color: 'var(--text-muted)', fontSize: 11, lineHeight: 1.5, marginTop: 5 }}>Separate public-source discovery. It can run with or without a Brand24 pull and makes no volume claims.</p></div><span style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-highlight)', fontSize: 10 }}>{qualitative.phase.toUpperCase()}</span></div>
         <div style={{ display: 'grid', gridTemplateColumns: '160px 1fr', gap: 12, marginTop: 14 }}><label style={{ fontSize: 11, color: 'var(--text-muted)' }}>Lookback before start (months)<input type="number" min="0" max="60" value={qualLookback} onChange={event => setQualLookback(event.target.value)} style={{ ...INPUT, marginTop: 5 }}/></label><div><div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 6 }}>Configured engines</div><div style={{ display: 'flex', flexWrap: 'wrap', gap: 12 }}>{qualEngines.map(engine => <label key={engine.id} style={{ fontSize: 11 }}><input type="checkbox" checked={engine.enabled} onChange={event => setQualEngines(previous => previous.map(item => item.id === engine.id ? { ...item, enabled: event.target.checked } : item))}/> {engine.label}</label>)}</div></div></div>
-        <div style={{ display: 'flex', gap: 8, marginTop: 14 }}><button type="button" disabled={qualBusy} onClick={startQualitative} style={{ ...INPUT, width: 'auto', background: 'var(--accent-highlight)', color: 'var(--text-on-accent)', cursor: qualBusy ? 'wait' : 'pointer' }}>{qualBusy ? 'Running step…' : 'Run qualitative layer (empty plan)'}</button><button type="button" disabled={qualBusy} onClick={loadPlan} style={{ ...INPUT, width: 'auto' }}>Load saved plan</button></div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 14 }}><button type="button" disabled={qualBusy} onClick={startQualitative} style={{ ...INPUT, width: 'auto', background: 'var(--accent-highlight)', color: 'var(--text-on-accent)', cursor: qualBusy ? 'wait' : 'pointer' }}>{qualBusy ? 'Running step…' : 'Run planner + discovery'}</button><button type="button" disabled={qualBusy} onClick={skipPlanner} style={{ ...INPUT, width: 'auto' }}>Skip planner — start from empty plan</button><button type="button" disabled={qualBusy} onClick={loadPlan} style={{ ...INPUT, width: 'auto' }}>Load saved plan</button></div>
+        {qualitative.phase === 'planner-failed' && <div style={{ marginTop: 12, padding: 12, border: '1px solid var(--accent-negative-border)', borderRadius: 7, background: 'var(--bg-panel-negative)', color: 'var(--accent-negative)', fontSize: 12 }}><strong>Planner failed: {qualitative.plannerError}</strong><p style={{ marginTop: 5, color: 'var(--text-muted)', fontSize: 11 }}>The raw response is available in the internal run log. You can retry or skip the planner and continue with discovery from an empty plan.</p></div>}
         {qualitative.phase === 'review' && <div style={{ marginTop: 16, borderTop: '1px solid var(--border)', paddingTop: 14 }}><h3 style={{ fontSize: 14 }}>Analyst review required</h3><p style={{ color: 'var(--text-muted)', fontSize: 11, margin: '5px 0 8px' }}>Edit aliases, exclusions, queries, and venues as JSON. No targeted search runs until you approve.</p><textarea value={qualitative.planText} onChange={event => setQualitative(previous => ({ ...previous, planText: event.target.value }))} rows={18} style={{ ...INPUT, fontFamily: 'var(--font-mono)', fontSize: 10, resize: 'vertical' }}/><button type="button" onClick={approveAndRun} disabled={qualBusy} style={{ ...INPUT, width: 'auto', marginTop: 8, background: 'var(--accent-live)', color: 'var(--text-on-accent)' }}>Approve plan and run targeted pass</button></div>}
-        {qualitative.logs.length > 0 && <details style={{ marginTop: 12 }} open={qualBusy}><summary style={{ cursor: 'pointer', fontSize: 11, color: 'var(--accent-live)' }}>Internal run log · cost and runtime</summary><div style={{ display: 'grid', gap: 4, marginTop: 7 }}>{qualitative.logs.map((log, index) => <div key={index} style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-muted)' }}>{log.step} · {log.engine || 'Claude'} · {(Number(log.runtimeMs || 0) / 1000).toFixed(1)}s · cost {log.costUsd == null ? 'not returned' : `$${Number(log.costUsd).toFixed(6)}`}{log.validation ? ` · kept ${log.validation.kept}, dropped ${log.validation.dropped} (${Object.entries(log.validation.dropReasons || {}).map(([reason, count]) => `${reason}:${count}`).join(', ') || 'none'})` : ''}{log.error ? ` · ${log.error}` : ''}</div>)}</div></details>}
+        {qualitative.logs.length > 0 && <details style={{ marginTop: 12 }} open={qualBusy || qualitative.phase === 'planner-failed'}><summary style={{ cursor: 'pointer', fontSize: 11, color: 'var(--accent-live)' }}>Internal run log · cost and runtime</summary><div style={{ display: 'grid', gap: 6, marginTop: 7 }}>{qualitative.logs.map((log, index) => <div key={index} style={{ fontFamily: 'var(--font-mono)', fontSize: 9, color: 'var(--text-muted)' }}><div>{log.step} · {log.engine || log.provider || 'Claude'} · {(Number(log.runtimeMs || 0) / 1000).toFixed(1)}s · cost {log.costUsd == null ? 'not returned' : `$${Number(log.costUsd).toFixed(6)}`}{log.stopReason ? ` · stop ${log.stopReason}` : ''}{log.validation ? ` · kept ${log.validation.kept}, dropped ${log.validation.dropped} (${Object.entries(log.validation.dropReasons || {}).map(([reason, count]) => `${reason}:${count}`).join(', ') || 'none'})` : ''}{log.error ? ` · ${log.error}` : ''}</div>{log.rawOutput && <details style={{ marginTop: 4 }}><summary style={{ cursor: 'pointer', color: 'var(--accent-highlight)' }}>Raw model output</summary><pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: 280, overflow: 'auto', padding: 8, background: 'var(--bg-input)', borderRadius: 5 }}>{log.rawOutput}</pre></details>}</div>)}</div></details>}
         {qualitative.phase === 'complete' && <div style={{ display: 'flex', flexWrap: 'wrap', gap: 14, marginTop: 13, paddingTop: 12, borderTop: '1px solid var(--border)' }}><label style={{ fontSize: 11 }}>Client/PDF findings <select value={verifiedOnly ? 'verified' : 'all'} onChange={event => setVerifiedOnly(event.target.value === 'verified')} style={{ ...INPUT, width: 'auto', marginLeft: 6 }}><option value="verified">Verified only (default)</option><option value="all">All retained</option></select></label><label style={{ fontSize: 11 }}><input type="checkbox" checked={showThirdParties} onChange={event => setShowThirdParties(event.target.checked)}/> Show third-party company names</label><span style={{ fontSize: 11, color: 'var(--text-muted)' }}>{qualitative.findings.length} unique retained · {qualitative.findings.filter(item => item.corroborated).length} corroborated</span></div>}
         {!result && qualitative.phase === 'complete' && <QualitativeReport qualitative={qualitative} verifiedOnly={verifiedOnly} setVerified={setFindingVerified} showThirdParties={showThirdParties}/>}
       </section>

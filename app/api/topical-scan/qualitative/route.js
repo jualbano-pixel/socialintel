@@ -1,7 +1,7 @@
 import { requestClaude } from '../../../../lib/claude-api';
 import { extractOpenRouterAnnotationUrls, requestGrokSearch } from '../../../../lib/grok-api';
 import { requestOpenRouterChat } from '../../../../lib/openrouter-api';
-import { cleanList, extractJson } from '../../../../lib/topical-scan';
+import { cleanList } from '../../../../lib/topical-scan';
 
 export const maxDuration = 120;
 const CLAUDE_MODEL = 'claude-sonnet-4-6';
@@ -20,6 +20,63 @@ function textFromOpenRouter(data) { const content = data?.choices?.[0]?.message?
 function geminiUrls(data) { return (data?.candidates || []).flatMap(candidate => candidate?.groundingMetadata?.groundingChunks || []).map(chunk => chunk?.web?.uri).filter(Boolean); }
 function geminiText(data) { return data?.candidates?.[0]?.content?.parts?.map(part => part.text || '').join('') || ''; }
 function usageCost(data) { return Number(data?.usage?.cost ?? data?.usage?.total_cost ?? data?.usage?.cost_details?.upstream_inference_cost ?? 0) || null; }
+
+const PLAN_SCHEMA = {
+  type: 'object', additionalProperties: false, required: ['aliases', 'exclusions', 'themes'],
+  properties: {
+    aliases: { type: 'array', items: { type: 'string' } },
+    exclusions: { type: 'array', items: { type: 'string' } },
+    themes: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['label', 'queries', 'venues'], properties: {
+      label: { type: 'string' }, queries: { type: 'array', minItems: 3, maxItems: 5, items: { type: 'string' } },
+      venues: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['venue', 'type', 'reason', 'discovered'], properties: { venue: { type: 'string' }, type: { type: 'string', enum: ['domain', 'subreddit', 'forum', 'platform', 'news outlet'] }, reason: { type: 'string' }, discovered: { type: 'boolean' } } } },
+    } } },
+  },
+};
+const FINDINGS_SCHEMA = { type: 'object', additionalProperties: false, required: ['findings'], properties: { findings: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['url', 'paraphrase', 'clientParaphrase', 'platform'], properties: { url: { type: 'string' }, paraphrase: { type: 'string' }, clientParaphrase: { type: 'string' }, platform: { type: 'string' } } } } } };
+const SYNTHESIS_SCHEMA = { type: 'object', additionalProperties: false, required: ['signalStrength', 'inPeriod', 'older', 'narratives', 'counterexamples', 'riskFlags'], properties: { signalStrength: { type: 'string', enum: ['Strong', 'Moderate', 'Thin', 'None found'] }, inPeriod: { type: 'string' }, older: { type: 'string' }, narratives: { type: 'array', items: { type: 'string' } }, counterexamples: { type: 'array', items: { type: 'string' } }, riskFlags: { type: 'array', items: { type: 'string' } } } };
+
+class StructuredOutputError extends Error {
+  constructor(message, rawOutput = '') { super(message); this.rawOutput = rawOutput; }
+}
+
+function fallbackJson(text) {
+  const raw = String(text || '').trim();
+  const unfenced = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+  const start = unfenced.indexOf('{'); const end = unfenced.lastIndexOf('}');
+  if (start < 0 || end <= start) throw new Error('No complete JSON object was returned.');
+  return JSON.parse(unfenced.slice(start, end + 1));
+}
+
+function schemaShapeValid(value, toolName) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  if (toolName === 'build_search_plan') return Array.isArray(value.aliases) && Array.isArray(value.exclusions) && Array.isArray(value.themes) && value.themes.every(theme => theme?.label && Array.isArray(theme.queries) && theme.queries.length >= 3 && theme.queries.length <= 5 && Array.isArray(theme.venues));
+  if (toolName === 'structure_findings') return Array.isArray(value.findings);
+  if (toolName === 'write_synthesis') return ['Strong', 'Moderate', 'Thin', 'None found'].includes(value.signalStrength) && Array.isArray(value.narratives) && Array.isArray(value.counterexamples) && Array.isArray(value.riskFlags);
+  return true;
+}
+
+async function claudeToolJson({ prompt, label, toolName, description, schema, maxTokens }) {
+  const body = { model: CLAUDE_MODEL, max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }], tools: [{ name: toolName, description, input_schema: schema }], tool_choice: { type: 'tool', name: toolName } };
+  const result = await requestClaude(body, { label });
+  if (!result.ok) throw new StructuredOutputError(result.data?.error?.message || `${label} failed (${result.status}).`, textFromClaude(result.data));
+  const rawOutput = textFromClaude(result.data) || JSON.stringify(result.data?.content || []); const stopReason = result.data?.stop_reason || '';
+  if (stopReason === 'max_tokens') throw new StructuredOutputError(`${label} stopped because it reached max_tokens (${maxTokens}).`, rawOutput);
+  const toolInput = result.data?.content?.find(block => block?.type === 'tool_use' && block?.name === toolName)?.input;
+  if (schemaShapeValid(toolInput, toolName)) return { value: toolInput, rawOutput, provider: result.provider, stopReason };
+  try {
+    const parsed = fallbackJson(rawOutput);
+    if (schemaShapeValid(parsed, toolName)) return { value: parsed, rawOutput, provider: result.provider, stopReason };
+  } catch { /* repaired below */ }
+  const repairPrompt = `Correct the following output to match the requested JSON schema. Return only one JSON object, without markdown fences or commentary. Schema: ${JSON.stringify(schema)}\n\nOutput to correct:\n${rawOutput || JSON.stringify(result.data?.content || [])}`;
+  const repair = await requestClaude({ model: CLAUDE_MODEL, max_tokens: maxTokens, messages: [{ role: 'user', content: repairPrompt }] }, { label: `${label} JSON repair` });
+  const repairRaw = textFromClaude(repair.data);
+  if (repair.data?.stop_reason === 'max_tokens') throw new StructuredOutputError(`${label} JSON repair stopped because it reached max_tokens (${maxTokens}).`, `${rawOutput}\n\nREPAIR:\n${repairRaw}`);
+  try {
+    const parsed = fallbackJson(repairRaw);
+    if (schemaShapeValid(parsed, toolName)) return { value: parsed, rawOutput: `${rawOutput}\n\nREPAIR:\n${repairRaw}`, provider: repair.provider, stopReason: repair.data?.stop_reason || '' };
+  } catch (error) { throw new StructuredOutputError(`${label} returned invalid structured JSON after one repair attempt: ${error.message}`, `${rawOutput}\n\nREPAIR:\n${repairRaw}`); }
+  throw new StructuredOutputError(`${label} returned JSON that did not match the required schema after one repair attempt.`, `${rawOutput}\n\nREPAIR:\n${repairRaw}`);
+}
 
 function normalizeUrl(value) {
   try {
@@ -121,12 +178,6 @@ function estimateBlockedReddit(items, rangeStart, rangeEnd) {
   });
 }
 
-async function claudeJson(prompt, label, maxTokens = 5000) {
-  const result = await requestClaude({ model: CLAUDE_MODEL, max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] }, { label });
-  if (!result.ok) throw new Error(result.data?.error?.message || `${label} failed (${result.status}).`);
-  return extractJson(textFromClaude(result.data), null);
-}
-
 async function runEngine(engine, prompt) {
   const started = Date.now(); let text = ''; let citationUrls = []; let data = {}; let provider = engine.label;
   if (engine.kind === 'grok') {
@@ -148,7 +199,7 @@ function engineList(input) {
 }
 
 function plannerPrompt(input) {
-  return `You are a Philippine social-listening search planner. Return ONLY valid JSON with this shape: {"aliases":["..."],"exclusions":["..."],"themes":[{"label":"...","queries":["..."],"venues":[{"venue":"...","type":"domain|subreddit|forum|platform|news outlet","reason":"one line","discovered":false}]}]}. Inputs: brand ${input.brand}; market ${input.market || 'Philippines'}; aliases ${JSON.stringify(input.aliases)}; exclusions ${JSON.stringify(input.exclusions)}; themes ${JSON.stringify(input.themes)}. Refine aliases and exclusions. Produce 3–5 useful query variants per theme, including relevant Philippine local-language or slang variants. Suggest candidate public venues based on research judgment and explain each. Do not invent URLs and do not include findings. Venues must be generated from these inputs, not a fixed template.`;
+  return `You are a Philippine social-listening search planner. Use the build_search_plan tool. Inputs: brand ${input.brand}; market ${input.market || 'Philippines'}; aliases ${JSON.stringify(input.aliases)}; exclusions ${JSON.stringify(input.exclusions)}; themes ${JSON.stringify(input.themes)}. Refine aliases and exclusions. Produce 3–5 useful query variants per theme, including relevant Philippine local-language or slang variants. Suggest candidate public venues based on research judgment and explain each. Do not invent URLs and do not include findings. Venues must be generated from these inputs, not a fixed template.`;
 }
 
 function discoveryPrompt(input, theme) {
@@ -195,9 +246,8 @@ export async function POST(request) {
     const input = await request.json(); const action = input.action;
     if (!action) return jsonError('Missing qualitative-layer action.');
     if (action === 'planner') {
-      const plan = await claudeJson(plannerPrompt(input), 'Qualitative planner');
-      if (!plan?.themes || !Array.isArray(plan.themes)) throw new Error('Planner returned invalid JSON.');
-      return Response.json({ plan, runtimeMs: Date.now() - started });
+      const structured = await claudeToolJson({ prompt: plannerPrompt(input), label: 'Planner', toolName: 'build_search_plan', description: 'Return the editable qualitative search plan.', schema: PLAN_SCHEMA, maxTokens: 12000 });
+      return Response.json({ plan: structured.value, provider: structured.provider, stopReason: structured.stopReason, runtimeMs: Date.now() - started });
     }
     if (action === 'discovery') {
       const theme = input.theme; if (!theme?.label) return jsonError('Missing theme.');
@@ -211,17 +261,18 @@ export async function POST(request) {
     if (action === 'targeted') {
       const engine = engineList(input).find(item => item.id === input.engineId); if (!engine) return jsonError('Unknown or disabled engine.');
       const result = await runEngine(engine, targetPrompt(input, input.theme));
-      const validated = await validateFindings(extractJson(result.text, []), result.citationUrls, input, engine);
+      const structured = await claudeToolJson({ prompt: `Use structure_findings to convert the search response into at most ${input.cap || 8} findings. Only use URLs present in this provider citation allowlist: ${JSON.stringify(result.citationUrls)}. Each paraphrase must explicitly name ${input.brand}. No usernames, handles, personal names, account details, personal amounts, or volume claims. Replace third-party company names with generic roles in clientParaphrase.\n\nSearch response:\n${result.text}`, label: `Finding structuring · ${engine.label}`, toolName: 'structure_findings', description: 'Structure provider-cited qualitative findings.', schema: FINDINGS_SCHEMA, maxTokens: 5000 });
+      const validated = await validateFindings(structured.value.findings, result.citationUrls, input, engine);
       console.log('[Qualitative Layer] targeted run', { ...result.log, theme: input.theme.label, validation: validated.validation });
       return Response.json({ ...validated, log: result.log, runtimeMs: Date.now() - started });
     }
     if (action === 'synthesis') {
-      const synthesis = await claudeJson(`Return ONLY JSON: {"signalStrength":"Strong|Moderate|Thin|None found","inPeriod":"...","older":"...","narratives":["..."],"counterexamples":["..."],"riskFlags":["..."]}. Theme: ${input.theme.label}. Findings: ${JSON.stringify(input.findings)}. Synthesize what is being said in-period versus older-but-public without volume claims. Treat posts as user claims, not verified account data or company policy. Co-occurrence with business news is not causation. Use no usernames. Hide third-party company names by describing their role. None found is valid.`, 'Qualitative synthesis', 3500);
-      return Response.json({ synthesis, runtimeMs: Date.now() - started });
+      const structured = await claudeToolJson({ prompt: `Use write_synthesis. Theme: ${input.theme.label}. Findings: ${JSON.stringify(input.findings)}. Synthesize what is being said in-period versus older-but-public without volume claims. Treat posts as user claims, not verified account data or company policy. Co-occurrence with business news is not causation. Use no usernames. Hide third-party company names by describing their role. None found is valid.`, label: 'Qualitative synthesis', toolName: 'write_synthesis', description: 'Return the guarded per-theme qualitative synthesis.', schema: SYNTHESIS_SCHEMA, maxTokens: 5000 });
+      return Response.json({ synthesis: structured.value, provider: structured.provider, stopReason: structured.stopReason, runtimeMs: Date.now() - started });
     }
     return jsonError('Unknown qualitative-layer action.');
   } catch (error) {
     console.error('[Qualitative Layer] failed', { error: error.message });
-    return jsonError(error.message || 'Qualitative layer failed.', 500);
+    return Response.json({ error: error.message || 'Qualitative layer failed.', ...(error.rawOutput ? { rawOutput: error.rawOutput } : {}) }, { status: 500 });
   }
 }
