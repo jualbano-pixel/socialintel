@@ -57,7 +57,7 @@ function schemaShapeValid(value, toolName) {
 
 async function claudeToolJson({ prompt, label, toolName, description, schema, maxTokens }) {
   const body = { model: CLAUDE_MODEL, max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }], tools: [{ name: toolName, description, input_schema: schema }], tool_choice: { type: 'tool', name: toolName } };
-  const result = await requestClaude(body, { label });
+  const result = await requestClaude(body, { label, signal: AbortSignal.timeout(110000) });
   if (!result.ok) throw new StructuredOutputError(result.data?.error?.message || `${label} failed (${result.status}).`, textFromClaude(result.data));
   const rawOutput = textFromClaude(result.data) || JSON.stringify(result.data?.content || []); const stopReason = result.data?.stop_reason || '';
   if (stopReason === 'max_tokens') throw new StructuredOutputError(`${label} stopped because it reached max_tokens (${maxTokens}).`, rawOutput);
@@ -68,7 +68,7 @@ async function claudeToolJson({ prompt, label, toolName, description, schema, ma
     if (schemaShapeValid(parsed, toolName)) return { value: parsed, rawOutput, provider: result.provider, stopReason };
   } catch { /* repaired below */ }
   const repairPrompt = `Correct the following output to match the requested JSON schema. Return only one JSON object, without markdown fences or commentary. Schema: ${JSON.stringify(schema)}\n\nOutput to correct:\n${rawOutput || JSON.stringify(result.data?.content || [])}`;
-  const repair = await requestClaude({ model: CLAUDE_MODEL, max_tokens: maxTokens, messages: [{ role: 'user', content: repairPrompt }] }, { label: `${label} JSON repair` });
+  const repair = await requestClaude({ model: CLAUDE_MODEL, max_tokens: maxTokens, messages: [{ role: 'user', content: repairPrompt }] }, { label: `${label} JSON repair`, signal: AbortSignal.timeout(110000) });
   const repairRaw = textFromClaude(repair.data);
   if (repair.data?.stop_reason === 'max_tokens') throw new StructuredOutputError(`${label} JSON repair stopped because it reached max_tokens (${maxTokens}).`, `${rawOutput}\n\nREPAIR:\n${repairRaw}`);
   try {
@@ -178,13 +178,13 @@ function estimateBlockedReddit(items, rangeStart, rangeEnd) {
   });
 }
 
-async function runEngine(engine, prompt) {
+async function runEngine(engine, prompt, { cap = 8 } = {}) {
   const started = Date.now(); let text = ''; let citationUrls = []; let data = {}; let provider = engine.label;
   if (engine.kind === 'grok') {
-    const result = await requestGrokSearch({ input: prompt, maxTokens: 4500 }); text = result.text; citationUrls = result.sourceUrls; data = result.data; provider = result.provider;
+    const result = await requestGrokSearch({ input: prompt, maxTokens: 4500, maxResults: cap, signal: AbortSignal.timeout(90000) }); text = result.text; citationUrls = result.sourceUrls; data = result.data; provider = result.provider;
   } else if (engine.kind === 'gemini') {
     if (!configured(process.env.GEMINI_API_KEY)) throw new Error('Gemini unavailable this run');
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${engine.model || GEMINI_MODEL}:generateContent?key=${process.env.GEMINI_API_KEY}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], tools: [{ google_search: {} }] }) });
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${engine.model || GEMINI_MODEL}:generateContent?key=${process.env.GEMINI_API_KEY}`, { method: 'POST', signal: AbortSignal.timeout(90000), headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], tools: [{ google_search: {} }] }) });
     data = await response.json(); if (!response.ok) throw new Error(data?.error?.message || `Gemini failed (${response.status}).`); text = geminiText(data); citationUrls = geminiUrls(data);
   } else {
     data = await requestOpenRouterChat({ model: engine.model, messages: [{ role: 'user', content: prompt }], maxTokens: 4500, tools: [{ type: 'openrouter:web_search' }] });
@@ -251,20 +251,22 @@ export async function POST(request) {
     }
     if (action === 'discovery') {
       const theme = input.theme; if (!theme?.label) return jsonError('Missing theme.');
-      const engines = engineList(input).slice(0, 2); const counts = new Map(); const logs = []; const errors = [];
-      for (const engine of engines) {
-        try { const result = await runEngine(engine, discoveryPrompt(input, theme)); logs.push(result.log); result.citationUrls.forEach(url => { const venue = venueFor(url); const current = counts.get(venue.venue) || { ...venue, hitCount: 0, reason: 'Discovered from a provider-cited URL', discovered: true }; current.hitCount += 1; counts.set(venue.venue, current); }); }
-        catch (error) { errors.push({ engine: engine.label, error: error.message }); logs.push({ engine: engine.label, runtimeMs: Date.now() - started, costUsd: null, error: error.message }); }
-      }
+      const engine = DEFAULT_ENGINES.find(item => item.id === 'gemini'); const counts = new Map(); const logs = []; const errors = [];
+      try { const result = await runEngine(engine, discoveryPrompt(input, theme), { cap: input.cap }); logs.push(result.log); result.citationUrls.forEach(url => { const venue = venueFor(url); const current = counts.get(venue.venue) || { ...venue, hitCount: 0, reason: 'Discovered from a provider-cited URL', discovered: true }; current.hitCount += 1; counts.set(venue.venue, current); }); }
+      catch (error) { errors.push({ engine: engine.label, error: error.message }); logs.push({ engine: engine.label, runtimeMs: Date.now() - started, costUsd: null, error: error.message }); throw error; }
       return Response.json({ venues: [...counts.values()].sort((a, b) => b.hitCount - a.hitCount), logs, errors, runtimeMs: Date.now() - started });
     }
-    if (action === 'targeted') {
+    if (action === 'targeted-search') {
       const engine = engineList(input).find(item => item.id === input.engineId); if (!engine) return jsonError('Unknown or disabled engine.');
-      const result = await runEngine(engine, targetPrompt(input, input.theme));
-      const structured = await claudeToolJson({ prompt: `Use structure_findings to convert the search response into at most ${input.cap || 8} findings. Only use URLs present in this provider citation allowlist: ${JSON.stringify(result.citationUrls)}. Each paraphrase must explicitly name ${input.brand}. No usernames, handles, personal names, account details, personal amounts, or volume claims. Replace third-party company names with generic roles in clientParaphrase.\n\nSearch response:\n${result.text}`, label: `Finding structuring · ${engine.label}`, toolName: 'structure_findings', description: 'Structure provider-cited qualitative findings.', schema: FINDINGS_SCHEMA, maxTokens: 5000 });
-      const validated = await validateFindings(structured.value.findings, result.citationUrls, input, engine);
-      console.log('[Qualitative Layer] targeted run', { ...result.log, theme: input.theme.label, validation: validated.validation });
-      return Response.json({ ...validated, log: result.log, runtimeMs: Date.now() - started });
+      const result = await runEngine(engine, targetPrompt(input, input.theme), { cap: input.cap });
+      return Response.json({ searchText: result.text, citationUrls: result.citationUrls, log: result.log, runtimeMs: Date.now() - started });
+    }
+    if (action === 'targeted-structure') {
+      const engine = engineList(input).find(item => item.id === input.engineId); if (!engine) return jsonError('Unknown or disabled engine.');
+      const structured = await claudeToolJson({ prompt: `Use structure_findings to convert the search response into at most ${input.cap || 8} findings. Only use URLs present in this provider citation allowlist: ${JSON.stringify(input.citationUrls || [])}. Each paraphrase must explicitly name ${input.brand}. No usernames, handles, personal names, account details, personal amounts, or volume claims. Replace third-party company names with generic roles in clientParaphrase.\n\nSearch response:\n${input.searchText || ''}`, label: `Finding structuring · ${engine.label}`, toolName: 'structure_findings', description: 'Structure provider-cited qualitative findings.', schema: FINDINGS_SCHEMA, maxTokens: 5000 });
+      const validated = await validateFindings(structured.value.findings, input.citationUrls || [], input, engine);
+      console.log('[Qualitative Layer] targeted run', { theme: input.theme.label, validation: validated.validation });
+      return Response.json({ ...validated, runtimeMs: Date.now() - started });
     }
     if (action === 'synthesis') {
       const structured = await claudeToolJson({ prompt: `Use write_synthesis. Theme: ${input.theme.label}. Findings: ${JSON.stringify(input.findings)}. Synthesize what is being said in-period versus older-but-public without volume claims. Treat posts as user claims, not verified account data or company policy. Co-occurrence with business news is not causation. Use no usernames. Hide third-party company names by describing their role. None found is valid.`, label: 'Qualitative synthesis', toolName: 'write_synthesis', description: 'Return the guarded per-theme qualitative synthesis.', schema: SYNTHESIS_SCHEMA, maxTokens: 5000 });
