@@ -30,13 +30,15 @@ async function classify(flagged, themes, onProgress = () => {}) {
   for (let offset = 0; offset < flagged.length; offset += 35) {
     const batchNumber = Math.floor(offset / 35) + 1;
     onProgress({ stage: 'classifying', message: `Classifying batch ${batchNumber} of ${totalBatches}`, current: batchNumber, total: totalBatches });
-    const batch = flagged.slice(offset, offset + 35).map(item => ({ id: item.id, text: item.text, candidates: item.candidateThemeIndexes }));
-    const claude = await claudeText(`Classify public social-listening mentions. Return ONLY a JSON array. Never repeat names, handles, account details, or personal amounts. Paraphrase neutrally. Themes are zero-indexed:\n${JSON.stringify(themes.map((theme, index) => ({ index, label: theme.label, description: theme.description })))}\n\nFor every input return {"id":"m1","relevant":true,"themeIndexes":[0],"stance":"complaint|advice-seeking|advice-giving|neutral|news","sentiment":"positive|neutral|negative|unknown","paraphrase":"anonymous paraphrase"}. Use relevant=false when it is not specifically about the stated theme. Mentions:\n${JSON.stringify(batch)}`, 5000);
+    const sourceBatch = flagged.slice(offset, offset + 35);
+    const batch = sourceBatch.map(item => ({ id: item.id, text: item.text, candidates: item.candidateThemeIndexes, matchedPhrases: item.matchedPhrases }));
+    const claude = await claudeText(`Classify public social-listening mentions. Return ONLY a JSON array with exactly one object per input, in the same order. Echo each input id exactly; never shorten or rewrite it. Never repeat names, handles, account details, or personal amounts. Paraphrase neutrally. Themes are zero-indexed:\n${JSON.stringify(themes.map((theme, index) => ({ index, label: theme.label, description: theme.description })))}\n\nFor every input return {"id":"EXACT_INPUT_ID","relevant":true,"themeIndexes":[0],"stance":"complaint|advice-seeking|advice-giving|neutral|news","sentiment":"positive|neutral|negative|unknown","paraphrase":"anonymous paraphrase"}. Consider only the supplied candidate theme indexes. Advice, educational videos, promotional posts, resource lists, and third-person content can be relevant; first-person experience is not required. A concrete matched phrase such as amnesty or restructuring is direct evidence for the corresponding candidate theme even when it appears in advice or a video description. Do not reject an item merely because it is promotional or provider-flagged noise. Use relevant=false only when the matched phrase is clearly unrelated to the candidate theme in context. Mentions:\n${JSON.stringify(batch)}`, 5000);
     backupUsed ||= claude.provider.claudeBackupUsed;
-    if (claude.provider.claudeBackupUsed) onProgress({ stage: 'provider', message: 'Claude via OpenRouter (backup)', provider: claude.provider });
+    onProgress({ stage: 'provider', message: claude.provider.claudeBackupUsed ? 'AI classification: Claude via backup provider' : 'AI classification: Claude', provider: claude.provider, internal: true });
     const parsed = extractJson(claude.text, []);
     if (!Array.isArray(parsed)) throw new Error('Classification returned invalid JSON. No metrics were produced.');
-    results.push(...parsed);
+    const batchIds = new Set(sourceBatch.map(item => item.id));
+    results.push(...parsed.map((item, index) => ({ ...item, id: batchIds.has(String(item?.id || '')) ? String(item.id) : sourceBatch[index]?.id || String(item?.id || '') })));
   }
   return { results, backupUsed };
 }
