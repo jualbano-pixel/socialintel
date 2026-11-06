@@ -219,9 +219,9 @@ async function executeScan(input, onProgress = () => {}) {
       monthPulls.push({ ...window, pages: mentionPull.pages, rawRetrieved: mentionPull.rawMentions, uniqueRetrieved: mentionPull.mentions.length, inRange: inRange.length, duplicatesRemoved: mentionPull.duplicateMentions, noiseExcluded: mentionPull.noiseExcluded || 0, mentionsWithoutId: mentionPull.mentionsWithoutId, removedOutsideRange, minReturnedDate: mentionPull.minDate, maxReturnedDate: mentionPull.maxDate, apiCount: count.total });
     }
     const expectedTotal = input.expectedTotal === '' || input.expectedTotal == null ? null : Number(input.expectedTotal);
-    const differencePct = expectedTotal == null || expectedTotal === 0 ? null : Number((Math.abs(mentions.length - expectedTotal) / expectedTotal * 100).toFixed(2));
+    const differencePct = expectedTotal == null || expectedTotal === 0 ? null : Number((Math.abs(apiCount - expectedTotal) / expectedTotal * 100).toFixed(2));
     const countMatchesExpected = expectedTotal == null || differencePct <= 2;
-    const countWarning = countMatchesExpected ? '' : `Count does not match dashboard: monitoring API returned ${mentions.length.toLocaleString()} unique in-range mentions; expected dashboard total is ${expectedTotal.toLocaleString()} (${differencePct}% difference). Dashboard filters are not represented by the raw API response.`;
+    const countWarning = countMatchesExpected ? '' : `Count does not match dashboard: the provider count returned ${apiCount.toLocaleString()} mentions before noise exclusion; expected dashboard total is ${expectedTotal.toLocaleString()} (${differencePct}% difference). Dashboard filters may differ from the API topic.`;
     if (countWarning) onProgress({ stage: 'warning', message: countWarning });
     const verified = summarizeClassifications({ mentions, flagged, classifications, themes: input.themes, totalReach, dateFrom: input.dateFrom, dateTo: input.dateTo, monthPulls });
     onProgress({ stage: 'directional', message: `Checking Grok via OpenRouter, Gemini, and Sonar via OpenRouter for ${input.themes.length} themes (maximum two concurrent)` });
