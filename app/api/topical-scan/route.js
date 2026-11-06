@@ -23,17 +23,16 @@ async function claudeText(prompt, maxTokens = 4000) {
 }
 
 async function classify(flagged, themes, onProgress = () => {}) {
-  if (!flagged.length) return { results: [], backupUsed: false, evidenceOverrides: 0 };
+  if (!flagged.length) return { results: [], backupUsed: false };
   const results = [];
   let backupUsed = false;
-  let evidenceOverrides = 0;
   const totalBatches = Math.ceil(flagged.length / 35);
   for (let offset = 0; offset < flagged.length; offset += 35) {
     const batchNumber = Math.floor(offset / 35) + 1;
     onProgress({ stage: 'classifying', message: `Classifying batch ${batchNumber} of ${totalBatches}`, current: batchNumber, total: totalBatches });
     const sourceBatch = flagged.slice(offset, offset + 35);
     const batch = sourceBatch.map(item => ({ id: item.id, text: item.text, candidates: item.candidateThemeIndexes, matchedPhrases: item.matchedPhrases }));
-    const claude = await claudeText(`Classify public social-listening mentions. Return ONLY a JSON array with exactly one object per input, in the same order. Echo each input id exactly; never shorten or rewrite it. Never repeat names, handles, account details, or personal amounts. Paraphrase neutrally. Themes are zero-indexed:\n${JSON.stringify(themes.map((theme, index) => ({ index, label: theme.label, description: theme.description })))}\n\nFor every input return {"id":"EXACT_INPUT_ID","relevant":true,"themeIndexes":[0],"stance":"complaint|advice-seeking|advice-giving|neutral|news","sentiment":"positive|neutral|negative|unknown","paraphrase":"anonymous paraphrase"}. Consider only the supplied candidate theme indexes. Advice, educational videos, promotional posts, resource lists, and third-person content can be relevant; first-person experience is not required. A concrete matched phrase such as amnesty or restructuring is direct evidence for the corresponding candidate theme even when it appears in advice or a video description. Do not reject an item merely because it is promotional or provider-flagged noise. Use relevant=false only when the matched phrase is clearly unrelated to the candidate theme in context. Mentions:\n${JSON.stringify(batch)}`, 5000);
+    const claude = await claudeText(`Classify public social-listening mentions. Pass-1 phrases only nominate candidate themes; they never establish theme membership. Return ONLY a JSON array with exactly one object per input, in the same order. Echo each input id exactly; never shorten or rewrite it. Never repeat names, handles, account details, or personal amounts. Paraphrase neutrally. Themes are zero-indexed:\n${JSON.stringify(themes.map((theme, index) => ({ index, label: theme.label, description: theme.description })))}\n\nFor every input return {"id":"EXACT_INPUT_ID","themeVerdicts":[{"themeIndex":0,"relevant":true,"reason":"one-line contextual reason","stance":"complaint|advice-seeking|advice-giving|neutral|news|news/business context"}],"sentiment":"positive|neutral|negative|unknown","paraphrase":"anonymous paraphrase"}. Return exactly one verdict for every supplied candidate index and no other indexes. Decide each candidate independently. Advice, educational videos, resource lists, and third-person content can be relevant; first-person experience is not required. Promotional framing and provider noise flags are not reasons by themselves to reject an item. However, a matched word or phrase is not sufficient: set relevant=false when the surrounding context does not substantively discuss that theme. Corporate or earnings reporting about bank restructuring, provisions, write-offs, NPLs, or credit costs belongs to T5 when applicable, with stance exactly "news/business context"; it is not borrower conversation. The reason must state the contextual evidence or why the phrase is incidental. Mentions:\n${JSON.stringify(batch)}`, 6000);
     backupUsed ||= claude.provider.claudeBackupUsed;
     onProgress({ stage: 'provider', message: claude.provider.claudeBackupUsed ? 'AI classification: Claude via backup provider' : 'AI classification: Claude', provider: claude.provider, internal: true });
     const parsed = extractJson(claude.text, []);
@@ -41,13 +40,20 @@ async function classify(flagged, themes, onProgress = () => {}) {
     const parsedById = new Map(parsed.map(item => [String(item?.id || ''), item]));
     results.push(...sourceBatch.map((source, index) => {
       const item = parsedById.get(source.id) || parsed[index] || {};
-      const returnedThemes = (Array.isArray(item.themeIndexes) ? item.themeIndexes : []).map(Number).filter(themeIndex => source.candidateThemeIndexes.includes(themeIndex));
-      const modelAccepted = item.relevant !== false && returnedThemes.length > 0;
-      if (!modelAccepted) evidenceOverrides += 1;
-      return { ...item, id: source.id, relevant: true, themeIndexes: modelAccepted ? returnedThemes : source.candidateThemeIndexes, stance: TOPICAL_STANCES.includes(item.stance) ? item.stance : 'advice-giving', sentiment: TOPICAL_SENTIMENTS.includes(item.sentiment) ? item.sentiment : String(source.sourceSentiment || 'unknown').toLocaleLowerCase(), paraphrase: item.paraphrase || 'The monitored item discusses a phrase matched to this theme.' };
+      const verdictsByTheme = new Map((Array.isArray(item.themeVerdicts) ? item.themeVerdicts : []).map(verdict => [Number(verdict?.themeIndex), verdict]));
+      const themeVerdicts = source.candidateThemeIndexes.map(themeIndex => {
+        const verdict = verdictsByTheme.get(themeIndex) || {};
+        return {
+          themeIndex,
+          relevant: verdict.relevant === true,
+          reason: String(verdict.reason || 'Claude returned no affirmative contextual reason.').replace(/\s+/g, ' ').slice(0, 240),
+          stance: TOPICAL_STANCES.includes(verdict.stance) ? verdict.stance : 'neutral',
+        };
+      });
+      return { id: source.id, themeVerdicts, sentiment: TOPICAL_SENTIMENTS.includes(item.sentiment) ? item.sentiment : String(source.sourceSentiment || 'unknown').toLocaleLowerCase(), paraphrase: item.paraphrase || 'The monitored item was reviewed against the candidate themes.' };
     }));
   }
-  return { results, backupUsed, evidenceOverrides };
+  return { results, backupUsed };
 }
 
 function directionalPrompt(input, theme, sourceLine, limit = null) {
@@ -207,7 +213,7 @@ async function executeScan(input, onProgress = () => {}) {
       if (preflightCount > 500) { const error = new Error(`This pull is estimated at ${preflightCount + windows.length * 40} Talkwalker credits for ${preflightCount} readable results. Confirmation is required.`); error.status = 409; throw error; }
     }
     const mentions = []; const flagged = []; const classifications = []; const monthPulls = [];
-    let totalReach = 0; let backupUsed = false; let evidenceOverrides = 0; let totalPages = 0; let rawRetrieved = 0; let duplicateMentions = 0; let mentionsWithoutId = 0; let apiCount = 0; let readableCount = 0; let noiseExcluded = 0; let creditsUsed = 0; const aggregateDaily = {}; const aggregatePlatforms = {};
+    let totalReach = 0; let backupUsed = false; let totalPages = 0; let rawRetrieved = 0; let duplicateMentions = 0; let mentionsWithoutId = 0; let apiCount = 0; let readableCount = 0; let noiseExcluded = 0; let creditsUsed = 0; const aggregateDaily = {}; const aggregatePlatforms = {};
     for (let monthIndex = 0; monthIndex < windows.length; monthIndex += 1) {
       const window = windows[monthIndex]; const label = `${window.month} (${monthIndex + 1}/${windows.length})`;
       onProgress({ stage: 'mentions', message: `${label} · pulling monitored mentions in Asia/Manila window ${window.dateFrom} 00:00–${window.dateTo} 23:59` });
@@ -225,7 +231,7 @@ async function executeScan(input, onProgress = () => {}) {
       onProgress({ stage: 'filtering', message: `${label} · ${monthFlagged.length} mentions flagged for classification` });
       const monthClassification = await classify(monthFlagged, input.themes, progress => onProgress({ ...progress, message: `${label} · ${progress.message}` }));
       mentions.push(...inRange); flagged.push(...monthFlagged); classifications.push(...monthClassification.results);
-      backupUsed ||= monthClassification.backupUsed; evidenceOverrides += monthClassification.evidenceOverrides || 0; totalReach += reach.totalReach; apiCount += count.total; readableCount += count.readableTotal ?? mentionPull.rawMentions; totalPages += mentionPull.pages; rawRetrieved += mentionPull.rawMentions; duplicateMentions += mentionPull.duplicateMentions; mentionsWithoutId += mentionPull.mentionsWithoutId; noiseExcluded += mentionPull.noiseExcluded || 0; creditsUsed += (mentionPull.creditsUsed || 0) + (reach.creditsUsed || 0) + (count.creditsUsed || 0);
+      backupUsed ||= monthClassification.backupUsed; totalReach += reach.totalReach; apiCount += count.total; readableCount += count.readableTotal ?? mentionPull.rawMentions; totalPages += mentionPull.pages; rawRetrieved += mentionPull.rawMentions; duplicateMentions += mentionPull.duplicateMentions; mentionsWithoutId += mentionPull.mentionsWithoutId; noiseExcluded += mentionPull.noiseExcluded || 0; creditsUsed += (mentionPull.creditsUsed || 0) + (reach.creditsUsed || 0) + (count.creditsUsed || 0);
       Object.entries(count.daily || {}).forEach(([date, value]) => { aggregateDaily[date] = (aggregateDaily[date] || 0) + Number(value || 0); }); Object.entries(count.platforms || {}).forEach(([platform, value]) => { aggregatePlatforms[platform] = (aggregatePlatforms[platform] || 0) + Number(value || 0); });
       monthPulls.push({ ...window, pages: mentionPull.pages, rawRetrieved: mentionPull.rawMentions, readableTotal: count.readableTotal, allPlatformTotal: count.total, uniqueRetrieved: mentionPull.mentions.length, inRange: inRange.length, duplicatesRemoved: mentionPull.duplicateMentions, noiseExcluded: mentionPull.noiseExcluded || 0, undatedExcluded, mentionsWithoutId: mentionPull.mentionsWithoutId, removedOutsideRange, minReturnedDate: mentionPull.minDate, maxReturnedDate: mentionPull.maxDate, apiCount: count.total });
     }
@@ -256,7 +262,7 @@ async function executeScan(input, onProgress = () => {}) {
       generatedAt: new Date().toISOString(), projectId: String(input.projectId), projectName: input.projectName || '', dateFrom: input.dateFrom, dateTo: input.dateTo, provider: providerDescriptor(provider.id),
       timezone: 'Asia/Manila',
       pull: { pages: totalPages, rawRetrieved, readableCount, retrieved: mentions.length, duplicateMentions, noiseExcluded, undatedExcluded: monthPulls.reduce((sum, month) => sum + month.undatedExcluded, 0), mentionsWithoutId, apiCount, expectedTotal, countMatchesExpected, differencePct, countWarning, months: monthPulls, projectIdConfirmed: String(input.projectId), coverageDateFrom: mentionDates[0] || null, coverageDateTo: mentionDates.at(-1) || null },
-      internalRunAudit: { creditsUsed, monthlyCreditsUsed: creditUsage?.usedMonthly ?? null, monthlyCreditsRemaining: creditUsage?.remainingMonthly ?? null, pass1EvidenceOverrides: evidenceOverrides },
+      internalRunAudit: { creditsUsed, monthlyCreditsUsed: creditUsage?.usedMonthly ?? null, monthlyCreditsRemaining: creditUsage?.remainingMonthly ?? null },
       claudeProvider: backupUsed ? 'Claude via OpenRouter (backup)' : 'Claude direct',
       claudeBackupUsed: backupUsed,
       verified, directional,
