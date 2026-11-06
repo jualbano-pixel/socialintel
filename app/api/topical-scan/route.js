@@ -194,29 +194,31 @@ async function executeScan(input, onProgress = () => {}) {
     const provider = getProvider(input.provider);
     if (provider.id === 'talkwalker' && input.confirmCredits !== true) {
       let preflightCount = 0;
-      for (const window of windows) preflightCount += (await provider.fetchCount({ projectId: String(input.projectId), dateFrom: window.dateFrom, dateTo: window.dateTo })).total;
-      if (preflightCount > 500) { const error = new Error(`This pull is estimated at ${preflightCount + windows.length * 30} Talkwalker credits for ${preflightCount} results. Confirmation is required.`); error.status = 409; throw error; }
+      for (const window of windows) preflightCount += (await provider.fetchCount({ projectId: String(input.projectId), dateFrom: window.dateFrom, dateTo: window.dateTo })).readableTotal;
+      if (preflightCount > 500) { const error = new Error(`This pull is estimated at ${preflightCount + windows.length * 40} Talkwalker credits for ${preflightCount} readable results. Confirmation is required.`); error.status = 409; throw error; }
     }
     const mentions = []; const flagged = []; const classifications = []; const monthPulls = [];
-    let totalReach = 0; let backupUsed = false; let totalPages = 0; let rawRetrieved = 0; let duplicateMentions = 0; let mentionsWithoutId = 0; let apiCount = 0; let noiseExcluded = 0; let creditsUsed = 0;
+    let totalReach = 0; let backupUsed = false; let totalPages = 0; let rawRetrieved = 0; let duplicateMentions = 0; let mentionsWithoutId = 0; let apiCount = 0; let readableCount = 0; let noiseExcluded = 0; let creditsUsed = 0; const aggregateDaily = {}; const aggregatePlatforms = {};
     for (let monthIndex = 0; monthIndex < windows.length; monthIndex += 1) {
       const window = windows[monthIndex]; const label = `${window.month} (${monthIndex + 1}/${windows.length})`;
       onProgress({ stage: 'mentions', message: `${label} · pulling monitored mentions in Asia/Manila window ${window.dateFrom} 00:00–${window.dateTo} 23:59` });
       const [mentionPull, reach, count] = await Promise.all([
-        provider.fetchMentions({ projectId: String(input.projectId), dateFrom: window.dateFrom, dateTo: window.dateTo, limit: 500, maxMentions: Infinity, maxPages: 1000, timeoutMs: 60000, logger: console, excludeNoise: input.excludeNoise !== false }),
+        provider.fetchMentions({ projectId: String(input.projectId), dateFrom: window.dateFrom, dateTo: window.dateTo, limit: 500, maxMentions: Infinity, maxPages: 1000, timeoutMs: 60000, logger: console, excludeNoise: input.excludeNoise === true }),
         provider.fetchReach({ projectId: String(input.projectId), dateFrom: window.dateFrom, dateTo: window.dateTo, timeoutMs: 60000, logger: console }),
         provider.fetchCount({ projectId: String(input.projectId), dateFrom: window.dateFrom, dateTo: window.dateTo, timeoutMs: 60000 }),
       ]);
       if (mentionPull.capped || mentionPull.hasMore || mentionPull.cursor) throw new Error(`${window.month} mention census did not complete. No report was produced.`);
       const inRange = filterMentionsToManilaRange(mentionPull.mentions, window.dateFrom, window.dateTo);
-      const removedOutsideRange = mentionPull.mentions.length - inRange.length;
+      const undatedExcluded = mentionPull.mentions.filter(mention => !mention.date).length;
+      const removedOutsideRange = mentionPull.mentions.length - inRange.length - undatedExcluded;
       const monthFlagged = flagMentions(inRange, input.themes, input.exclusions, `${window.month}-`);
       onProgress({ stage: 'mentions', message: `${label} · ${mentionPull.rawMentions} raw, ${mentionPull.mentions.length} unique, ${mentionPull.duplicateMentions} duplicates removed, ${removedOutsideRange} outside Manila range removed` });
       onProgress({ stage: 'filtering', message: `${label} · ${monthFlagged.length} mentions flagged for classification` });
       const monthClassification = await classify(monthFlagged, input.themes, progress => onProgress({ ...progress, message: `${label} · ${progress.message}` }));
       mentions.push(...inRange); flagged.push(...monthFlagged); classifications.push(...monthClassification.results);
-      backupUsed ||= monthClassification.backupUsed; totalReach += reach.totalReach; apiCount += count.total; totalPages += mentionPull.pages; rawRetrieved += mentionPull.rawMentions; duplicateMentions += mentionPull.duplicateMentions; mentionsWithoutId += mentionPull.mentionsWithoutId; noiseExcluded += mentionPull.noiseExcluded || 0; creditsUsed += (mentionPull.creditsUsed || 0) + (reach.creditsUsed || 0) + (count.creditsUsed || 0);
-      monthPulls.push({ ...window, pages: mentionPull.pages, rawRetrieved: mentionPull.rawMentions, uniqueRetrieved: mentionPull.mentions.length, inRange: inRange.length, duplicatesRemoved: mentionPull.duplicateMentions, noiseExcluded: mentionPull.noiseExcluded || 0, mentionsWithoutId: mentionPull.mentionsWithoutId, removedOutsideRange, minReturnedDate: mentionPull.minDate, maxReturnedDate: mentionPull.maxDate, apiCount: count.total });
+      backupUsed ||= monthClassification.backupUsed; totalReach += reach.totalReach; apiCount += count.total; readableCount += count.readableTotal ?? mentionPull.rawMentions; totalPages += mentionPull.pages; rawRetrieved += mentionPull.rawMentions; duplicateMentions += mentionPull.duplicateMentions; mentionsWithoutId += mentionPull.mentionsWithoutId; noiseExcluded += mentionPull.noiseExcluded || 0; creditsUsed += (mentionPull.creditsUsed || 0) + (reach.creditsUsed || 0) + (count.creditsUsed || 0);
+      Object.entries(count.daily || {}).forEach(([date, value]) => { aggregateDaily[date] = (aggregateDaily[date] || 0) + Number(value || 0); }); Object.entries(count.platforms || {}).forEach(([platform, value]) => { aggregatePlatforms[platform] = (aggregatePlatforms[platform] || 0) + Number(value || 0); });
+      monthPulls.push({ ...window, pages: mentionPull.pages, rawRetrieved: mentionPull.rawMentions, readableTotal: count.readableTotal, allPlatformTotal: count.total, uniqueRetrieved: mentionPull.mentions.length, inRange: inRange.length, duplicatesRemoved: mentionPull.duplicateMentions, noiseExcluded: mentionPull.noiseExcluded || 0, undatedExcluded, mentionsWithoutId: mentionPull.mentionsWithoutId, removedOutsideRange, minReturnedDate: mentionPull.minDate, maxReturnedDate: mentionPull.maxDate, apiCount: count.total });
     }
     const expectedTotal = input.expectedTotal === '' || input.expectedTotal == null ? null : Number(input.expectedTotal);
     const differencePct = expectedTotal == null || expectedTotal === 0 ? null : Number((Math.abs(apiCount - expectedTotal) / expectedTotal * 100).toFixed(2));
@@ -224,6 +226,7 @@ async function executeScan(input, onProgress = () => {}) {
     const countWarning = countMatchesExpected ? '' : `Count does not match dashboard: the provider count returned ${apiCount.toLocaleString()} mentions before noise exclusion; expected dashboard total is ${expectedTotal.toLocaleString()} (${differencePct}% difference). Dashboard filters may differ from the API topic.`;
     if (countWarning) onProgress({ stage: 'warning', message: countWarning });
     const verified = summarizeClassifications({ mentions, flagged, classifications, themes: input.themes, totalReach, dateFrom: input.dateFrom, dateTo: input.dateTo, monthPulls });
+    verified.baseline = { ...verified.baseline, totalMentions: apiCount, readableMentions: readableCount, datedReadableMentions: mentions.length, daily: aggregateDaily, platforms: aggregatePlatforms, collectionsShare: Number((verified.baseline.collectionsRelatedMentions / Math.max(apiCount, 1) * 100).toFixed(2)) };
     onProgress({ stage: 'directional', message: `Checking Grok via OpenRouter, Gemini, and Sonar via OpenRouter for ${input.themes.length} themes (maximum two concurrent)` });
     const tasks = input.themes.flatMap((theme, themeIndex) => [
       { themeIndex, source: 'Grok via OpenRouter', run: () => pullGrok(input, theme) },
@@ -238,25 +241,27 @@ async function executeScan(input, onProgress = () => {}) {
     }));
     onProgress({ stage: 'report', message: 'Assembling the complete topical report' });
     const mentionDates = mentions.map(mention => String(mention?.date || mention?.published_at || mention?.publishedAt || mention?.created_at || mention?.createdAt || '').slice(0, 10)).filter(date => /^\d{4}-\d{2}-\d{2}$/.test(date)).sort();
+    const creditUsage = provider.fetchCreditUsage ? await provider.fetchCreditUsage() : null;
+    onProgress({ stage: 'credits', message: `${creditsUsed} credits used this run${creditUsage ? ` · ${creditUsage.usedMonthly} used this billing month` : ''}`, internal: true });
     return {
       generatedAt: new Date().toISOString(), projectId: String(input.projectId), projectName: input.projectName || '', dateFrom: input.dateFrom, dateTo: input.dateTo, provider: providerDescriptor(provider.id),
       timezone: 'Asia/Manila',
-      pull: { pages: totalPages, rawRetrieved, retrieved: mentions.length, duplicateMentions, noiseExcluded, mentionsWithoutId, apiCount, expectedTotal, countMatchesExpected, differencePct, countWarning, months: monthPulls, projectIdConfirmed: String(input.projectId), coverageDateFrom: mentionDates[0] || null, coverageDateTo: mentionDates.at(-1) || null },
-      internalRunAudit: { creditsUsed },
+      pull: { pages: totalPages, rawRetrieved, readableCount, retrieved: mentions.length, duplicateMentions, noiseExcluded, undatedExcluded: monthPulls.reduce((sum, month) => sum + month.undatedExcluded, 0), mentionsWithoutId, apiCount, expectedTotal, countMatchesExpected, differencePct, countWarning, months: monthPulls, projectIdConfirmed: String(input.projectId), coverageDateFrom: mentionDates[0] || null, coverageDateTo: mentionDates.at(-1) || null },
+      internalRunAudit: { creditsUsed, monthlyCreditsUsed: creditUsage?.usedMonthly ?? null, monthlyCreditsRemaining: creditUsage?.remainingMonthly ?? null },
       claudeProvider: backupUsed ? 'Claude via OpenRouter (backup)' : 'Claude direct',
       claudeBackupUsed: backupUsed,
       verified, directional,
       coverageCaveat: 'Public monitoring cannot see closed Facebook groups, Messenger, Telegram, Viber, or other private conversations. Captured mentions are a floor, not all conversation.',
       privacyNote: 'Aggregate reporting only. Examples are paraphrased and identifying details are removed.',
-      filterAudit: provider.id === 'talkwalker' ? `Talkwalker topic results use sourcecountry:ph. Noise filtering ${input.excludeNoise === false ? 'was disabled' : `excluded ${noiseExcluded} records using flagged categories and noise level >= 70`}. Raw Reddit and TikTok documents are not exportable through this API; aggregate histograms may include them.` : 'Provider-native project filters and the requested date range were preserved.',
+      filterAudit: provider.id === 'talkwalker' ? `Talkwalker topic results use sourcecountry:ph. Noise filtering ${input.excludeNoise === true ? `excluded ${noiseExcluded} records using flagged categories and noise level >= 70` : 'was disabled; noise-flagged readable mentions remain tagged for analyst review'}. Facebook, Reddit, Instagram, and TikTok text is restricted by platform policy and is counted only in histogram totals.` : 'Provider-native project filters and the requested date range were preserved.',
     };
 }
 
 async function estimateScan(input) {
   const errors = validateTopicalScanInput(input); if (errors.length) return { error: errors.join(' '), status: 400 };
-  const provider = getProvider(input.provider); const windows = calendarMonthWindows(input.dateFrom, input.dateTo); let total = 0;
-  for (const window of windows) total += (await provider.fetchCount({ projectId: String(input.projectId), dateFrom: window.dateFrom, dateTo: window.dateTo })).total;
-  return { provider: providerDescriptor(provider.id), resultCount: total, estimatedCredits: provider.id === 'talkwalker' ? total + windows.length * 30 : null, requiresConfirmation: provider.id === 'talkwalker' && total > 500 };
+  const provider = getProvider(input.provider); const windows = calendarMonthWindows(input.dateFrom, input.dateTo); let resultCount = 0; let allPlatformCount = 0;
+  for (const window of windows) { const count = await provider.fetchCount({ projectId: String(input.projectId), dateFrom: window.dateFrom, dateTo: window.dateTo }); resultCount += count.readableTotal ?? count.total; allPlatformCount += count.total; }
+  return { provider: providerDescriptor(provider.id), resultCount, allPlatformCount, estimatedCredits: provider.id === 'talkwalker' ? resultCount + windows.length * 40 : null, requiresConfirmation: provider.id === 'talkwalker' && resultCount > 500 };
 }
 
 export async function POST(request) {

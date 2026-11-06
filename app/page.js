@@ -471,7 +471,7 @@ function trackerAgent(d) {
     return value !== undefined && value !== '' && Number.isFinite(n) ? n : fallback;
   };
   return {
-    mentions: { total: tot, dailyAvg: Math.round(tot / days) },
+    mentions: { total: tot, readable: Number(d.readableMentions ?? d.diagnostics?.readableMentions ?? tot), dailyAvg: Math.round(tot / days) },
     totalReach: reach,
     socialMediaReach: d.socialMediaReach,
     nonSocialMediaReach: d.nonSocialMediaReach,
@@ -581,7 +581,7 @@ Return valid JSON. Use client-facing language only: say "our monitoring data", "
 {"executiveSummary":"3 sentences with specific numbers and named events","spikeDrivers":["specific named driver with evidence","second specific driver"],"sentimentNarrative":"2 sentences naming specific positive and negative drivers","channelInsight":"1 sentence with platform specifics"}`,
     700,
     {
-      executiveSummary: `${brand} recorded ${metrics.mentions.total} mentions during ${period} with ${fmt(metrics.totalReach)} total reach.`,
+      executiveSummary: `${brand} recorded ${metrics.mentions.total} mentions during ${period} with ${fmt(metrics.totalReach)} potential reach (provider estimate).`,
       spikeDrivers: ['Partnership and product announcements drove conversation spikes', 'Regulatory and fee-related news generated significant organic amplification'],
       sentimentNarrative: `${metrics.sentiment.positive.pct}% positive sentiment driven by product launches and partnerships. ${metrics.sentiment.negative.pct}% negative concentrated on service delivery and registration issues.`,
       channelInsight: 'News and forums dominated conversation volume, with TikTok driving younger audience engagement.',
@@ -970,7 +970,7 @@ function SOVRow({ brand, percentage, mentions, isClient, found, manualVerified, 
 const DEMO_SOCIAL_LISTENING = {
   overview: [
     { label: 'Total mentions', value: '2 281', change: '+6774%', tone: 'up' },
-    { label: 'Total reach', value: '25M', change: '+1022%', tone: 'up' },
+    { label: 'Potential reach (Talkwalker estimate)', value: '25M', change: '+1022%', tone: 'up' },
     { label: 'Positive mentions', value: '277', change: '+9133%', tone: 'up' },
     { label: 'Negative mentions', value: '98', change: '+4800%', tone: 'down' },
     { label: 'Average Presence Score', value: '35/100', change: '+3400%', tone: 'up' },
@@ -1041,7 +1041,7 @@ const EASTWEST_DEMO_EVENTS = [
 const EASTWEST_JUNE28_CONTEXT = `
 June 28, 2026 daily report:
 - Total mentions: 58 (+12%).
-- Total reach: 3.4M (+515%), mostly social reach at 3.2M.
+- Potential reach (Talkwalker estimate): 3.4M (+515%), mostly social reach at 3.2M.
 - The disproportionate reach spike was driven by a YouTube video from EastWest Horizons.
 - EastWest Horizons mention details: YouTube, 3.0M views, 5,010 followers, June 28, 2026.
 - Video message: open a regular savings or checking account for up to Php 100,000 in rewards with EastWest Horizons.
@@ -1090,8 +1090,9 @@ function socialListeningSnapshot(brand, metrics, demoMode) {
     sources: [],
     sentiment: [],
     overview: [
-      { label: 'Total mentions', value: fmt(total), change: isManual ? 'Manual' : 'Live', tone: 'live' },
-      { label: 'Total reach', value: fmt(reach), change: mcpSourceFiltered ? 'Full project' : isManual ? 'Manual' : 'Live', tone: 'live' },
+      { label: 'Total mentions (all platforms)', value: fmt(total), change: isManual ? 'Manual' : 'Live', tone: 'live' },
+      { label: 'Readable mentions (text available)', value: fmt(metrics.mentions.readable ?? total), change: 'Platform policy', tone: 'live' },
+      { label: 'Potential reach (Talkwalker estimate)', value: fmt(reach), change: mcpSourceFiltered ? 'Full project' : isManual ? 'Manual' : 'Live', tone: 'live' },
       { label: 'Positive mentions', value: fmt(positive), change: `${metrics.sentiment.positive.pct}%`, tone: 'up' },
       { label: 'Negative mentions', value: fmt(negative), change: `${metrics.sentiment.negative.pct}%`, tone: 'down' },
       { label: 'Average Presence Score', value: metrics.averagePresenceScore || `${Math.min(100, Math.max(1, Math.round((Math.log10(total + 1) * 11) + (metrics.sentiment.positive.pct / 3))))}/100`, change: metrics.averagePresenceScore ? (isManual ? 'Manual' : 'Live') : 'Est.', tone: 'live' },
@@ -2046,7 +2047,7 @@ Return a concise intelligence summary, recurring themes, specific public posts o
                   {[
                     ['Date range', 'dateRange', 'text'],
                     ['Total mentions', 'totalMentions', 'number'],
-                    ['Total reach', 'totalReach', 'number'],
+                    ['Potential reach (Talkwalker estimate)', 'totalReach', 'number'],
                     ['Positive count', 'positiveMentions', 'number'],
                     ['Neutral count', 'neutralMentions', 'number'],
                     ['Negative count', 'negativeMentions', 'number'],
@@ -2160,11 +2161,13 @@ Return a concise intelligence summary, recurring themes, specific public posts o
         <IntelligenceQuery query={query} setQuery={setQuery} loading={queryLoading} result={queryResult} error={queryError} open={queryOpen} setOpen={setQueryOpen} onSubmit={runTopicQuery}/>
 
         {/* Metrics */}
-        <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:10, marginBottom:14 }}>
-          <Metric label="Total Mentions" value={fmt(displayMetrics.mentions.total)} sub={manualVerified?`Manually verified · ${displayMetrics.manualFileName || 'monitoring export'}`:hasB24?`Live tracking${displayMetrics.mentionSampleCapped ? ' sample' : ''} · ${displayMetrics.projectName||''}`:useEastWestDemo?'EastWest demo report':'No tracking source'}/>
-          <Metric label="Total Reach" value={fmt(displayMetrics.totalReach)} sub={manualVerified?'Confirmed tracking export':"30-day period"}/>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(4,1fr)', gap:10, marginBottom:14 }}>
+          <Metric label="Total mentions (all platforms)" value={fmt(displayMetrics.mentions.total)} sub={manualVerified?`Manually verified · ${displayMetrics.manualFileName || 'monitoring export'}`:hasB24?`Live tracking${displayMetrics.mentionSampleCapped ? ' sample' : ''} · ${displayMetrics.projectName||''}`:useEastWestDemo?'EastWest demo report':'No tracking source'}/>
+          <Metric label="Readable mentions (text available)" value={fmt(displayMetrics.mentions.readable ?? displayMetrics.mentions.total)} sub="Facebook, Reddit, Instagram and TikTok text may be restricted"/>
+          <Metric label="Potential reach (Talkwalker estimate)" value={fmt(displayMetrics.totalReach)} sub={manualVerified?'Confirmed tracking export':"30-day period"}/>
           <Metric label="Daily Avg" value={displayMetrics.mentions.dailyAvg}/>
         </div>
+        {displayMetrics.provider?.id === 'talkwalker' && <p style={{ color:'var(--text-faint)', fontSize:10, margin:'-6px 0 14px' }}>Facebook, Reddit, Instagram and TikTok text is restricted by platform policy and is counted in all-platform Histogram totals. Internal usage: {fmt(displayMetrics.diagnostics?.creditsUsed || 0)} credits this run{displayMetrics.diagnostics?.monthlyCreditsUsed != null ? ` · ${fmt(displayMetrics.diagnostics.monthlyCreditsUsed)} this billing month` : ''}.</p>}
 
         {/* Spike Drivers */}
         <div style={{ ...CARD, marginBottom:14 }}>
