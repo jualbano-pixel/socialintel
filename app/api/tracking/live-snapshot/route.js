@@ -30,6 +30,7 @@ export async function POST(request) {
 
     const snapshot = await Promise.race([
       getLiveSnapshot({
+        provider: body.provider,
         accountId,
         brand,
         aliases: Array.isArray(body.aliases) ? body.aliases : [],
@@ -39,6 +40,7 @@ export async function POST(request) {
         dateTo: body.dateTo,
         countryFilter: body.philippinesOnly ? 'PH' : '',
         sourceFilter: body.sourceFilter,
+        excludeNoise: body.excludeNoise !== false,
         filters: {
           sentiment: body.sentiment,
           category: body.category,

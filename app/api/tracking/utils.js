@@ -1,5 +1,5 @@
-import { listProjects, getMentions, getMentionsReach } from '../../../lib/brand24-rest';
 import { getFilteredProjectSources } from '../../../lib/brand24-mcp';
+import { getProvider } from '../../../lib/providers';
 
 const SOURCE_COLORS = ['#2f86de', '#dc37a5', '#e74c3c', '#f78fb3', '#33b6b4', '#7155d9', '#f4d03f', '#7ed6df'];
 const SOCIAL_CATEGORIES = new Set(['facebook', 'instagram', 'tiktok', 'twitter', 'x', 'youtube', 'reddit', 'socialmedia']);
@@ -298,17 +298,21 @@ function summarizeSourceSample({ mentions, brand, project, country, language }) 
   };
 }
 
-export async function getLiveSnapshot({ accountId, brand, aliases = [], projectId: storedProjectId = '', projectName: storedProjectName = '', dateFrom, dateTo, filters = {}, countryFilter = '', sourceFilter = null }) {
-  const knownProjectId = String(storedProjectId || '').trim();
+export async function getLiveSnapshot({ provider: requestedProvider, accountId, brand, aliases = [], projectId: storedProjectId = '', projectName: storedProjectName = '', dateFrom, dateTo, filters = {}, countryFilter = '', sourceFilter = null, excludeNoise = true }) {
+  const provider = getProvider(requestedProvider);
+  const suppliedProjectId = String(storedProjectId || '').trim();
+  const knownProjectId = provider.id === 'talkwalker' && suppliedProjectId && !suppliedProjectId.startsWith('mv') ? '' : suppliedProjectId;
   let projects = [];
   let project = knownProjectId
     ? { id: knownProjectId, name: storedProjectName || brand }
     : null;
   if (!project) {
     console.info('[Tracking live snapshot] project list start', { brand, dateFrom, dateTo, countryFilter });
-    projects = await listProjects(accountId);
+    projects = await provider.listProjects(accountId);
     console.info('[Tracking live snapshot] project list done', { brand, dateFrom, dateTo, projectCount: projects.length });
-    project = resolveProject(projects, brand, aliases);
+    project = provider.id === 'talkwalker'
+      ? projects.find(item => String(itemName(item)).toLowerCase().trim() === String(brand).toLowerCase().trim()) || null
+      : resolveProject(projects, brand, aliases);
   }
   console.info('[Tracking live snapshot] project resolution', {
     brand,
@@ -347,7 +351,7 @@ export async function getLiveSnapshot({ accountId, brand, aliases = [], projectI
   let mentionsResult;
   let reach;
   const mentionSampleLimit = LIVE_MENTION_SAMPLE_LIMIT;
-  const filteredSourcePromise = sourceFilter?.type === 'mcp' && sourceFilter.country
+  const filteredSourcePromise = provider.id === 'brand24' && sourceFilter?.type === 'mcp' && sourceFilter.country
     ? (async () => {
       try {
         console.info('[Tracking live snapshot] MCP source filter start', { brand, projectId, projectName, dateFrom, dateTo, sourceFilter });
@@ -381,7 +385,7 @@ export async function getLiveSnapshot({ accountId, brand, aliases = [], projectI
   const reachPromise = (async () => {
     try {
       console.info('[Tracking live snapshot] reach stage start', { brand, projectId, projectName, dateFrom, dateTo });
-      const reachResult = await getMentionsReach(projectId, dateFrom, dateTo, {
+      const reachResult = await provider.fetchReach({ projectId, dateFrom, dateTo,
         timeoutMs: SNAPSHOT_STAGE_TIMEOUT_MS,
         logger: console,
       });
@@ -413,8 +417,9 @@ export async function getLiveSnapshot({ accountId, brand, aliases = [], projectI
 
   try {
     console.info('[Tracking live snapshot] mentions stage start', { brand, projectId, projectName, dateFrom, dateTo });
-    mentionsResult = await getMentions(projectId, dateFrom, dateTo, {
+    mentionsResult = await provider.fetchMentions({ projectId, dateFrom, dateTo,
       ...filters,
+      excludeNoise,
       timeoutMs: SNAPSHOT_STAGE_TIMEOUT_MS,
       maxMentions: mentionSampleLimit,
       logger: console,
@@ -479,7 +484,10 @@ export async function getLiveSnapshot({ accountId, brand, aliases = [], projectI
       hasMore: mentionsResult.hasMore,
     },
   });
-  if (sourceFilter?.type === 'mcp' && sourceFilter.country) {
+  snapshot.provider = { id: provider.id, name: provider.name, capabilities: provider.capabilities };
+  snapshot.diagnostics.noiseExcluded = mentionsResult.noiseExcluded || 0;
+  snapshot.diagnostics.providerCapabilityNote = provider.capabilities.filteredSourceSample ? '' : 'Filtered source sample not available from this provider.';
+  if (provider.id === 'brand24' && sourceFilter?.type === 'mcp' && sourceFilter.country) {
     const sourceResult = filteredSourcePromise ? await filteredSourcePromise : null;
     if (sourceResult?.sourceSample) {
       const sourceSample = sourceResult.sourceSample;

@@ -1,4 +1,5 @@
-import { getMentions, getMentionsCount, getMentionsReach, toClientSafeError } from '../../../lib/brand24-rest';
+import { toClientSafeError } from '../../../lib/brand24-rest';
+import { getProvider, providerDescriptor } from '../../../lib/providers';
 import { claudeProviderMetadata, requestClaude } from '../../../lib/claude-api';
 import { requestOpenRouterChat } from '../../../lib/openrouter-api';
 import { extractOpenRouterAnnotationUrls, requestGrokSearch } from '../../../lib/grok-api';
@@ -190,15 +191,21 @@ async function executeScan(input, onProgress = () => {}) {
     const errors = validateTopicalScanInput(input);
     if (errors.length) { const error = new Error(errors.join(' ')); error.status = 400; throw error; }
     const windows = calendarMonthWindows(input.dateFrom, input.dateTo);
+    const provider = getProvider(input.provider);
+    if (provider.id === 'talkwalker' && input.confirmCredits !== true) {
+      let preflightCount = 0;
+      for (const window of windows) preflightCount += (await provider.fetchCount({ projectId: String(input.projectId), dateFrom: window.dateFrom, dateTo: window.dateTo })).total;
+      if (preflightCount > 500) { const error = new Error(`This pull is estimated at ${preflightCount + windows.length * 30} Talkwalker credits for ${preflightCount} results. Confirmation is required.`); error.status = 409; throw error; }
+    }
     const mentions = []; const flagged = []; const classifications = []; const monthPulls = [];
-    let totalReach = 0; let backupUsed = false; let totalPages = 0; let rawRetrieved = 0; let duplicateMentions = 0; let mentionsWithoutId = 0; let apiCount = 0;
+    let totalReach = 0; let backupUsed = false; let totalPages = 0; let rawRetrieved = 0; let duplicateMentions = 0; let mentionsWithoutId = 0; let apiCount = 0; let noiseExcluded = 0; let creditsUsed = 0;
     for (let monthIndex = 0; monthIndex < windows.length; monthIndex += 1) {
       const window = windows[monthIndex]; const label = `${window.month} (${monthIndex + 1}/${windows.length})`;
       onProgress({ stage: 'mentions', message: `${label} · pulling monitored mentions in Asia/Manila window ${window.dateFrom} 00:00–${window.dateTo} 23:59` });
       const [mentionPull, reach, count] = await Promise.all([
-        getMentions(String(input.projectId), window.dateFrom, window.dateTo, { limit: 500, maxMentions: Infinity, maxPages: 1000, timeoutMs: 60000, logger: console }),
-        getMentionsReach(String(input.projectId), window.dateFrom, window.dateTo, { timeoutMs: 60000, logger: console }),
-        getMentionsCount(String(input.projectId), window.dateFrom, window.dateTo, { timeoutMs: 60000 }),
+        provider.fetchMentions({ projectId: String(input.projectId), dateFrom: window.dateFrom, dateTo: window.dateTo, limit: 500, maxMentions: Infinity, maxPages: 1000, timeoutMs: 60000, logger: console, excludeNoise: input.excludeNoise !== false }),
+        provider.fetchReach({ projectId: String(input.projectId), dateFrom: window.dateFrom, dateTo: window.dateTo, timeoutMs: 60000, logger: console }),
+        provider.fetchCount({ projectId: String(input.projectId), dateFrom: window.dateFrom, dateTo: window.dateTo, timeoutMs: 60000 }),
       ]);
       if (mentionPull.capped || mentionPull.hasMore || mentionPull.cursor) throw new Error(`${window.month} mention census did not complete. No report was produced.`);
       const inRange = filterMentionsToManilaRange(mentionPull.mentions, window.dateFrom, window.dateTo);
@@ -208,8 +215,8 @@ async function executeScan(input, onProgress = () => {}) {
       onProgress({ stage: 'filtering', message: `${label} · ${monthFlagged.length} mentions flagged for classification` });
       const monthClassification = await classify(monthFlagged, input.themes, progress => onProgress({ ...progress, message: `${label} · ${progress.message}` }));
       mentions.push(...inRange); flagged.push(...monthFlagged); classifications.push(...monthClassification.results);
-      backupUsed ||= monthClassification.backupUsed; totalReach += reach.totalReach; apiCount += count.total; totalPages += mentionPull.pages; rawRetrieved += mentionPull.rawMentions; duplicateMentions += mentionPull.duplicateMentions; mentionsWithoutId += mentionPull.mentionsWithoutId;
-      monthPulls.push({ ...window, pages: mentionPull.pages, rawRetrieved: mentionPull.rawMentions, uniqueRetrieved: mentionPull.mentions.length, inRange: inRange.length, duplicatesRemoved: mentionPull.duplicateMentions, mentionsWithoutId: mentionPull.mentionsWithoutId, removedOutsideRange, minReturnedDate: mentionPull.minDate, maxReturnedDate: mentionPull.maxDate, apiCount: count.total });
+      backupUsed ||= monthClassification.backupUsed; totalReach += reach.totalReach; apiCount += count.total; totalPages += mentionPull.pages; rawRetrieved += mentionPull.rawMentions; duplicateMentions += mentionPull.duplicateMentions; mentionsWithoutId += mentionPull.mentionsWithoutId; noiseExcluded += mentionPull.noiseExcluded || 0; creditsUsed += (mentionPull.creditsUsed || 0) + (reach.creditsUsed || 0) + (count.creditsUsed || 0);
+      monthPulls.push({ ...window, pages: mentionPull.pages, rawRetrieved: mentionPull.rawMentions, uniqueRetrieved: mentionPull.mentions.length, inRange: inRange.length, duplicatesRemoved: mentionPull.duplicateMentions, noiseExcluded: mentionPull.noiseExcluded || 0, mentionsWithoutId: mentionPull.mentionsWithoutId, removedOutsideRange, minReturnedDate: mentionPull.minDate, maxReturnedDate: mentionPull.maxDate, apiCount: count.total });
     }
     const expectedTotal = input.expectedTotal === '' || input.expectedTotal == null ? null : Number(input.expectedTotal);
     const differencePct = expectedTotal == null || expectedTotal === 0 ? null : Number((Math.abs(mentions.length - expectedTotal) / expectedTotal * 100).toFixed(2));
@@ -232,21 +239,31 @@ async function executeScan(input, onProgress = () => {}) {
     onProgress({ stage: 'report', message: 'Assembling the complete topical report' });
     const mentionDates = mentions.map(mention => String(mention?.date || mention?.published_at || mention?.publishedAt || mention?.created_at || mention?.createdAt || '').slice(0, 10)).filter(date => /^\d{4}-\d{2}-\d{2}$/.test(date)).sort();
     return {
-      generatedAt: new Date().toISOString(), projectId: String(input.projectId), projectName: input.projectName || '', dateFrom: input.dateFrom, dateTo: input.dateTo,
+      generatedAt: new Date().toISOString(), projectId: String(input.projectId), projectName: input.projectName || '', dateFrom: input.dateFrom, dateTo: input.dateTo, provider: providerDescriptor(provider.id),
       timezone: 'Asia/Manila',
-      pull: { pages: totalPages, rawRetrieved, retrieved: mentions.length, duplicateMentions, mentionsWithoutId, apiCount, expectedTotal, countMatchesExpected, differencePct, countWarning, months: monthPulls, projectIdConfirmed: String(input.projectId), coverageDateFrom: mentionDates[0] || null, coverageDateTo: mentionDates.at(-1) || null },
+      pull: { pages: totalPages, rawRetrieved, retrieved: mentions.length, duplicateMentions, noiseExcluded, mentionsWithoutId, apiCount, expectedTotal, countMatchesExpected, differencePct, countWarning, months: monthPulls, projectIdConfirmed: String(input.projectId), coverageDateFrom: mentionDates[0] || null, coverageDateTo: mentionDates.at(-1) || null },
+      internalRunAudit: { creditsUsed },
       claudeProvider: backupUsed ? 'Claude via OpenRouter (backup)' : 'Claude direct',
       claudeBackupUsed: backupUsed,
       verified, directional,
       coverageCaveat: 'Public monitoring cannot see closed Facebook groups, Messenger, Telegram, Viber, or other private conversations. Captured mentions are a floor, not all conversation.',
       privacyNote: 'Aggregate reporting only. Examples are paraphrased and identifying details are removed.',
-      filterAudit: 'The Brand24 REST mention rows expose no deleted, hidden, excluded, spam, active, or visibility field. Its documented mention endpoint exposes date, category, and sentiment filters, but no supported parameter for reproducing dashboard deletion, muted-author/domain, saved-search, geo/language, or relevance filters.',
+      filterAudit: provider.id === 'talkwalker' ? `Talkwalker topic results use sourcecountry:ph. Noise filtering ${input.excludeNoise === false ? 'was disabled' : `excluded ${noiseExcluded} records using flagged categories and noise level >= 70`}. Raw Reddit and TikTok documents are not exportable through this API; aggregate histograms may include them.` : 'Provider-native project filters and the requested date range were preserved.',
     };
+}
+
+async function estimateScan(input) {
+  const errors = validateTopicalScanInput(input); if (errors.length) return { error: errors.join(' '), status: 400 };
+  const provider = getProvider(input.provider); const windows = calendarMonthWindows(input.dateFrom, input.dateTo); let total = 0;
+  for (const window of windows) total += (await provider.fetchCount({ projectId: String(input.projectId), dateFrom: window.dateFrom, dateTo: window.dateTo })).total;
+  return { provider: providerDescriptor(provider.id), resultCount: total, estimatedCredits: provider.id === 'talkwalker' ? total + windows.length * 30 : null, requiresConfirmation: provider.id === 'talkwalker' && total > 500 };
 }
 
 export async function POST(request) {
   const input = await request.json().catch(() => null);
-  const stream = new URL(request.url).searchParams.get('stream') === '1';
+  const url = new URL(request.url);
+  if (url.searchParams.get('estimate') === '1') { const estimate = await estimateScan(input); return Response.json(estimate, { status: estimate.status || 200 }); }
+  const stream = url.searchParams.get('stream') === '1';
   if (stream) {
     const encoder = new TextEncoder();
     return new Response(new ReadableStream({

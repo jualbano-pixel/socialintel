@@ -1,10 +1,13 @@
-import { Brand24RestError, getProjectEnrichment, toClientSafeError } from '../../../../lib/brand24-rest';
+import { Brand24RestError, toClientSafeError } from '../../../../lib/brand24-rest';
+import { getProvider } from '../../../../lib/providers';
 
 const ENRICHMENT_TIMEOUT_MS = 90000;
 
 export async function POST(request) {
   try {
     const body = await request.json();
+    const provider = getProvider(body.provider);
+    if (!provider.capabilities.enrichment) return Response.json({ provider: provider.name, available: false, note: 'Enrichment is not available from this provider.' });
     const projectId = String(body.projectId || body.monitorId || '').trim();
     if (!projectId) return Response.json({ error: 'Choose a tracking source before loading enrichment data.' }, { status: 400 });
     if (!body.dateFrom || !body.dateTo) return Response.json({ error: 'Choose a reporting date range before loading enrichment data.' }, { status: 400 });
@@ -18,7 +21,7 @@ export async function POST(request) {
     });
 
     const enrichment = await Promise.race([
-      getProjectEnrichment(projectId, body.dateFrom, body.dateTo, body.sections),
+      provider.fetchEnrichment({ projectId, dateFrom: body.dateFrom, dateTo: body.dateTo, sections: body.sections }),
       timeout,
     ]).finally(() => clearTimeout(timeoutId));
 

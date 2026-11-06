@@ -6,6 +6,7 @@ import { parsePeriod } from '../lib/report-period.mjs';
 const LIME = 'var(--accent-live)';
 const CLAUDE_MODEL = 'claude-sonnet-4-6';
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === 'true';
+const ACTIVE_MENTION_PROVIDER = 'talkwalker';
 const fmt = n => n >= 1e9 ? `${(n/1e9).toFixed(1)}B` : n >= 1e6 ? `${(n/1e6).toFixed(1)}M` : n >= 1e3 ? `${(n/1e3).toFixed(1)}K` : String(n || 0);
 const CARD = { background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 10, padding: '18px 22px' };
 const NETFLIX_STREAMING_COMPETITORS = ['Viu Philippines', 'Amazon Prime', 'HBO Max', 'iWant', 'Viva One'];
@@ -124,6 +125,10 @@ function manualCompetitorOverride(primaryBrand, competitor) {
 }
 
 async function pullBrand24CompetitorRow(competitor, startDate, endDate) {
+  if (ACTIVE_MENTION_PROVIDER === 'talkwalker') {
+    const data = await liveTrackingSnapshot(competitor, startDate, endDate);
+    return { brand: displayCompetitorName(competitor), mentions: Number(data.totalMentions) || 0, percentage: 0, isClient: false, found: !!data.found, projectName: data.projectName, projectId: data.projectId, provider: data.provider };
+  }
   const aliases = BRAND24_PROJECT_ALIASES[String(competitor || '').toLowerCase().trim()] || BRAND24_PROJECT_ALIASES[brandKey(competitor)] || [];
   const text = await claudeB24(
     `You have social listening tools.
@@ -322,6 +327,7 @@ async function liveTrackingSnapshot(brand, startDate, endDate, monitor = null) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
+      provider: 'talkwalker',
       brand,
       aliases,
       projectId: storedProjectId,
@@ -330,6 +336,7 @@ async function liveTrackingSnapshot(brand, startDate, endDate, monitor = null) {
       dateTo: endDate,
       philippinesOnly: setup?.philippinesOnly === true,
       sourceFilter,
+      excludeNoise: true,
     }),
   });
   const data = await response.json();
@@ -436,6 +443,7 @@ async function listenerAgent(brand, startDate, endDate) {
     return data;
   } catch (error) {
     console.warn('[Listener] REST snapshot unavailable', error.message);
+    if (ACTIVE_MENTION_PROVIDER === 'talkwalker') throw error;
     if (!String(error.message || '').includes('not configured')) throw error;
   }
   const text = await claudeB24(
@@ -484,6 +492,7 @@ function trackerAgent(d) {
     sourceCategories: d.sourceCategories || [],
     topMentions: d.topMentions || [],
     sourceNarrative: d.sourceNarrative || '',
+    provider: d.provider || { id: ACTIVE_MENTION_PROVIDER, name: 'Talkwalker' },
   };
 }
 
@@ -519,6 +528,10 @@ function manualSnapshotToListenerData(manual, brand) {
 }
 
 async function contextScoutAgent(brand, competitors, period, startDate, endDate) {
+  if (ACTIVE_MENTION_PROVIDER === 'talkwalker') {
+    const grokSignals = await callGrok(brand, competitors, period);
+    return { found: false, events: [], themes: [], qualitativeSignals: 'Provider-detected events, semantic search, and topic overview are not available from this provider.', topTopics: [], providerCapabilityNote: 'Not available from this provider.', grokSignals };
+  }
   const [b24Result, grokResult] = await Promise.allSettled([
     claudeB24(
       `You have social listening tools.
@@ -677,6 +690,16 @@ async function competitiveIntelAgent(brand, competitors, startDate, endDate, gro
         sourceLabel: row.sourceLabel || 'Live',
       })),
     };
+  }
+
+  if (ACTIVE_MENTION_PROVIDER === 'talkwalker') {
+    const rows = [];
+    for (const name of [brand, ...competitors]) {
+      const snapshot = await liveTrackingSnapshot(name, startDate, endDate);
+      rows.push({ brand: name, mentions: Number(snapshot.totalMentions) || 0, found: !!snapshot.found, isClient: sameBrandName(name, brand), projectName: snapshot.projectName, projectId: snapshot.projectId, provider: snapshot.provider });
+    }
+    const total = rows.reduce((sum, row) => sum + (row.found ? row.mentions : 0), 0) || 1;
+    return { sovData: rows.map(row => ({ ...row, percentage: row.found ? Number((row.mentions / total * 100).toFixed(1)) : 0 })), competitorNotes: rows.filter(row => !row.isClient && row.found).map(row => ({ brand: row.brand, observation: `${row.brand} registered ${fmt(row.mentions)} monitored mentions in the same period.` })), diagnostics: rows };
   }
 
   const brandsToPull = manualClientMetrics ? competitors : [brand, ...competitors];
@@ -2097,9 +2120,11 @@ Return a concise intelligence summary, recurring themes, specific public posts o
               SOCIAL MONITORING REPORT · 6 AGENTS
             </div>
             <div style={{ display:'inline-flex', marginBottom:7, border:`1px solid ${claudeBackupUsed?'var(--accent-highlight-border)':'var(--border)'}`, borderRadius:5, padding:'4px 7px', color:claudeBackupUsed?'var(--accent-highlight)':'var(--text-faint)', fontFamily:"'JetBrains Mono',monospace", fontSize:9 }}>{claudeBackupUsed ? 'Claude via OpenRouter (backup)' : 'Claude direct'}</div>
+            <div style={{ marginBottom:7, color:'var(--text-muted)', fontFamily:"'JetBrains Mono',monospace", fontSize:9 }}>MENTION-DATA PROVIDER · {displayMetrics.provider?.name || 'Talkwalker'}</div>
             <SourceAttribution hasB24={hasB24} hasGrok={hasGrok} competitiveLite={competitiveLite} manualVerified={manualVerified} uploadDate={displayMetrics.manualUploadDate} />
             <h1 style={{ fontFamily:"'Barlow Condensed',sans-serif", fontSize:36, fontWeight:700, margin:'0 0 4px' }}>{brand}</h1>
             <p style={{ color:'var(--text-muted)', fontSize:13, margin:0 }}>{period} · Prepared by Praxis Experiential</p>
+            <p style={{ color:'var(--text-faint)', fontSize:10, margin:'4px 0 0' }}>Method: mention counts, sentiment, source mix and potential reach supplied by {displayMetrics.provider?.name || 'Talkwalker'}; analysis and labels remain Signal Intel.</p>
             {manualVerified && (
               <div style={{ marginTop:8, display:'inline-flex', alignItems:'center', gap:7, background:'var(--accent-highlight-soft)', border:'1px solid var(--accent-highlight-border)', borderRadius:6, padding:'6px 9px', color:'var(--accent-highlight)', fontSize:10, fontFamily:"'JetBrains Mono',monospace", letterSpacing:'0.08em', textTransform:'uppercase' }}>
                 Manually verified data — {displayMetrics.manualUploadDate ? new Date(displayMetrics.manualUploadDate).toLocaleDateString() : 'uploaded this run'}
