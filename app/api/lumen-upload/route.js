@@ -1,0 +1,25 @@
+import * as XLSX from 'xlsx';
+
+export const runtime = 'nodejs';
+const SHEETS = ['Top Social Results', 'Top Positive Results', 'Top Negative Results', 'Trending Posts'];
+
+function number(value) { const parsed = Number(value); return Number.isFinite(parsed) ? parsed : 0; }
+function platform(value) { const key = String(value || '').toUpperCase(); if (key.includes('TWITTER')) return 'X'; if (key.includes('YOUTUBE')) return 'YouTube'; if (key.includes('ONLINENEWS')) return 'News'; if (key.includes('BLOG')) return 'Blogs'; if (key.includes('MESSAGEBOARD') || key.includes('FORUM')) return 'Forums'; if (key.includes('FACEBOOK')) return 'Facebook'; if (key.includes('INSTAGRAM')) return 'Instagram'; if (key.includes('TIKTOK')) return 'TikTok'; if (key.includes('REDDIT')) return 'Reddit'; return 'Web'; }
+function sentiment(value) { if (typeof value === 'number') return value > 0 ? 'Positive' : value < 0 ? 'Negative' : 'Neutral'; const key = String(value || '').toLowerCase(); return key.includes('pos') ? 'Positive' : key.includes('neg') ? 'Negative' : 'Neutral'; }
+function manilaDate(value) { let date = value instanceof Date ? value : null; if (!date && typeof value === 'number') { const parsed = XLSX.SSF.parse_date_code(value); if (parsed) date = new Date(Date.UTC(parsed.y, parsed.m - 1, parsed.d, parsed.H || 0, parsed.M || 0, Math.floor(parsed.S || 0))); } if (!date && value) { const text = String(value).trim(); date = new Date(/Z$|[+-]\d\d:?\d\d$/.test(text) ? text : `${text.replace(' ', 'T')}+08:00`); } if (!date || Number.isNaN(date.valueOf())) return ''; return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila', year: 'numeric', month: '2-digit', day: '2-digit' }).format(date); }
+function clean(value) { return String(value || '').replace(/<[^>]+>/g, '').replace(/https?:\/\/\S+|@[\w.-]+/g, '').replace(/[“”"']/g, '').replace(/\s+/g, ' ').trim(); }
+function normalizeUrl(value) { try { const url = new URL(String(value || '').trim()); url.hash = ''; [...url.searchParams.keys()].filter(key => /^utm_|^(fbclid|gclid)$/i.test(key)).forEach(key => url.searchParams.delete(key)); return url.toString().replace(/\/$/, ''); } catch { return ''; } }
+function post(row, sheet) { const url = normalizeUrl(row.url || row.parent_url); if (!url) return null; const postPlatform = platform(row.source_type); const raw = clean(row.title || row.title_snippet || row.content_snippet || row.content); const textAvailable = postPlatform !== 'X' || Boolean(raw); return { id: url, url, date: manilaDate(row.published), platform: postPlatform, engagement: number(row.engagement), sentiment: sentiment(row.sentiment), source: 'Lumen export', paraphrase: raw ? `This ${postPlatform} item focuses on ${raw.slice(0, 180)}.` : `A ${postPlatform} item discusses the monitored topic.`, textAvailable, group: sheet === 'Top Positive Results' ? 'positive' : sheet === 'Top Negative Results' ? 'negative' : 'overall' }; }
+
+export async function POST(request) {
+  try {
+    const form = await request.formData(); const file = form.get('file');
+    if (!file || typeof file.arrayBuffer !== 'function') return Response.json({ error: 'Choose a Lumen .xls export.' }, { status: 400 });
+    if (file.size > 10 * 1024 * 1024) return Response.json({ error: 'The Lumen export must be 10 MB or smaller.' }, { status: 413 });
+    const bytes = Buffer.from(await file.arrayBuffer()); if (bytes.length < 8 || bytes.subarray(0, 8).toString('hex') !== 'd0cf11e0a1b11ae1') return Response.json({ error: 'Expected a legacy Lumen .xls workbook.' }, { status: 400 });
+    const workbook = XLSX.read(bytes, { type: 'buffer', cellDates: true, cellFormula: false, cellHTML: false }); const missingSheets = SHEETS.filter(name => !workbook.Sheets[name]); const rows = [];
+    for (const sheet of SHEETS.filter(name => workbook.Sheets[name])) { const records = XLSX.utils.sheet_to_json(workbook.Sheets[sheet], { range: 3, defval: null, raw: true }); for (const record of records) { const item = post(record, sheet); if (item) rows.push(item); } }
+    const deduped = new Map(); for (const item of rows) { const current = deduped.get(item.url); if (!current || item.engagement > current.engagement) deduped.set(item.url, { ...current, ...item, group: current?.group === 'positive' || current?.group === 'negative' ? current.group : item.group }); }
+    const posts = [...deduped.values()].filter(item => item.textAvailable).sort((a, b) => b.engagement - a.engagement); return Response.json({ fileName: file.name, source: 'Lumen export', posts, groups: { overall: posts.filter(item => item.group === 'overall').slice(0, 10), positive: posts.filter(item => item.sentiment === 'Positive').slice(0, 5), negative: posts.filter(item => item.sentiment === 'Negative').slice(0, 5) }, diagnostics: { sheetsRead: SHEETS.filter(name => workbook.Sheets[name]), missingSheets, rowsRead: rows.length, uniqueUrls: posts.length } });
+  } catch (error) { console.error('[Lumen upload] parse failed', { message: error.message }); return Response.json({ error: 'The Lumen export could not be parsed.' }, { status: 400 }); }
+}

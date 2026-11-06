@@ -491,9 +491,20 @@ function trackerAgent(d) {
     ave: d.ave,
     sourceCategories: d.sourceCategories || [],
     topMentions: d.topMentions || [],
+    analytics: d.analytics || {},
+    topPosts: d.topPosts || {},
     sourceNarrative: d.sourceNarrative || '',
     provider: d.provider || { id: ACTIVE_MENTION_PROVIDER, name: 'Talkwalker' },
   };
+}
+
+function mergeLumenTopPosts(listenerData, upload) {
+  if (!upload?.posts?.length) return listenerData;
+  const api = listenerData.topPosts || {}; const all = [...(api.overall || []), ...(api.positive || []), ...(api.negative || []), ...upload.posts]; const byUrl = new Map();
+  all.forEach(item => { if (!item?.url) return; const current = byUrl.get(item.url); if (!current || Number(item.engagement || 0) > Number(current.engagement || 0)) byUrl.set(item.url, item); });
+  const posts = [...byUrl.values()].sort((a, b) => Number(b.engagement || 0) - Number(a.engagement || 0)); const groups = { overall: posts.slice(0, 10), positive: posts.filter(item => item.sentiment === 'Positive').slice(0, 5), negative: posts.filter(item => item.sentiment === 'Negative').slice(0, 5) };
+  const topMentions = [...groups.overall, ...groups.positive, ...groups.negative].filter((item, index, values) => values.findIndex(candidate => candidate.url === item.url) === index).map(item => ({ source: item.platform, title: item.paraphrase, text: item.paraphrase, sentiment: item.sentiment, url: item.url, meta: [item.date, `${Number(item.engagement || 0).toLocaleString()} engagement`, item.source].filter(Boolean).join(' · '), engagement: item.engagement, date: item.date, origin: item.source }));
+  return { ...listenerData, topPosts: { ...api, ...groups, note: api.apiLimited ? `${api.note} Uploaded rows are labeled Lumen export.` : `${api.note || ''} Lumen export rows were merged and deduplicated by URL.`.trim() }, topMentions };
 }
 
 function manualSnapshotToListenerData(manual, brand) {
@@ -1084,6 +1095,7 @@ function socialListeningSnapshot(brand, metrics, demoMode) {
       text: m.text || m.title || `Mention extracted from ${isManual ? 'the uploaded export' : 'live tracking data'}.`,
       icon: (m.icon || (m.source || `M${i + 1}`).slice(0, 2)).toUpperCase(),
       color: m.color || sourcePalette[i % sourcePalette.length],
+      url: m.url || '',
     }));
   return {
     mentions: [],
@@ -1117,7 +1129,7 @@ function socialListeningSnapshot(brand, metrics, demoMode) {
       { name: 'Neutral', pct: pct(neutral, positive + negative + neutral), color: 'var(--chart-neutral)' },
       { name: 'Positive', pct: pct(positive, positive + negative + neutral), color: 'var(--accent-positive)' },
       { name: 'Negative', pct: pct(negative, positive + negative + neutral), color: 'var(--accent-negative)' },
-    ],
+    ], analytics: metrics.analytics || {}, topPosts: metrics.topPosts || {},
   };
 }
 
@@ -1140,6 +1152,7 @@ function MentionCard({ mention }) {
           </div>
           <div style={{ color:'var(--text-muted)', fontSize:10, marginBottom:12 }}>{mention.source} · {mention.meta}</div>
           <p style={{ color:'var(--text-secondary)', fontSize:11, lineHeight:1.55, margin:0 }}>{mention.text}</p>
+          {mention.url && <a href={mention.url} target="_blank" rel="noreferrer" style={{ display:'inline-block', color:'var(--accent-live)', fontSize:10, marginTop:8 }}>Open source</a>}
         </div>
       </div>
     </div>
@@ -1234,24 +1247,37 @@ function SocialListeningReport({ brand, metrics, demoMode }) {
   const sourceNarrative = social.sourceNarrative || (topSource
     ? `${topSource.name} is the largest source in this uploaded tracking snapshot at ${topSource.pct}%.`
     : 'Source-share data was not extracted from the uploaded export.');
+  const postCard = (item, index) => ({ source:item.platform || 'Web', title:item.paraphrase || `Top post ${index + 1}`, text:item.paraphrase || 'No readable text was returned.', sentiment:item.sentiment || 'Neutral', url:item.url || '', meta:[item.date, `${fmt(item.engagement || 0)} engagement`, item.source].filter(Boolean).join(' · '), icon:(item.platform || 'W').slice(0,2).toUpperCase(), color:'var(--chart-blue)' });
   return (
     <div style={{ marginBottom:16 }}>
       <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(320px, 1fr))', gap:12, alignItems:'start', marginBottom:12 }}>
         <div>
           <h2 style={{ fontSize:20, margin:'0 0 8px', fontWeight:800 }}>Top Mentions</h2>
+          {social.topPosts?.note && <p style={{ color:'var(--accent-highlight)', fontSize:11, lineHeight:1.55, margin:'0 0 8px' }}>{social.topPosts.note}</p>}
           {social.sourceSampleNote && <p style={{ color:'var(--accent-highlight)', fontSize:11, lineHeight:1.55, margin:'0 0 8px' }}>{social.sourceSampleNote}</p>}
-          <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(280px, 1fr))', gap:8 }}>
-            {social.mentions.length
-              ? social.mentions.map((mention, i) => <MentionCard key={i} mention={mention}/>)
+          <h3 style={{ fontSize:12, margin:'10px 0 7px' }}>Top 10 by engagement</h3><div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(280px, 1fr))', gap:8 }}>
+            {social.topPosts?.overall?.length
+              ? social.topPosts.overall.map((item, i) => <MentionCard key={`overall-${item.url || i}`} mention={postCard(item, i)}/>)
+              : social.mentions.length ? social.mentions.map((mention, i) => <MentionCard key={i} mention={mention}/>)
               : <div style={{ ...CARD, minHeight:118, color:'var(--text-muted)', fontSize:12, lineHeight:1.65 }}>No top mentions were extracted from this uploaded export. Use the confirmation step to verify whether the tracking export included that page.</div>
             }
           </div>
+          {['positive','negative'].map(group => <div key={group}><h3 style={{ fontSize:12, margin:'12px 0 7px', textTransform:'capitalize' }}>Top 5 {group}</h3><div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(280px, 1fr))', gap:8 }}>{(social.topPosts?.[group] || []).map((item, i) => <MentionCard key={`${group}-${item.url || i}`} mention={postCard(item, i)}/>)}</div></div>)}
         </div>
         <div>
           <h2 style={{ fontSize:20, margin:'0 0 8px', fontWeight:800 }}>Overview</h2>
           <OverviewGrid items={social.overview}/>
         </div>
       </div>
+
+      {metrics.provider?.id === 'talkwalker' && <div style={{ ...CARD, marginBottom:12 }}>
+        <h2 style={{ fontSize:20, margin:'0 0 12px', fontWeight:800 }}>Quantitative intelligence</h2>
+        <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(190px, 1fr))', gap:14 }}>
+          {[['Share of voice', social.analytics.shareOfVoice], ['Top themes', social.analytics.themes], ['Top hashtags', social.analytics.hashtags], ['Associated brands', social.analytics.brands], ['Gender', social.analytics.gender], ['Age', social.analytics.age], ['Cities', social.analytics.cities]].map(([label, values]) => <div key={label}><h3 style={{ fontSize:12, margin:'0 0 7px' }}>{label}</h3>{Array.isArray(values) && values.length ? values.slice(0,10).map(item => <div key={`${label}-${item.label}`} style={{ display:'flex', justifyContent:'space-between', gap:8, fontSize:10, color:'var(--text-muted)', padding:'3px 0' }}><span>{item.label}</span><strong style={{ color:'var(--text-primary)' }}>{fmt(item.value)}</strong></div>) : <p style={{ fontSize:10, color:'var(--text-faint)' }}>Not available from this provider for this run.</p>}</div>)}
+        </div>
+        <details style={{ marginTop:12 }}><summary style={{ cursor:'pointer', color:'var(--accent-live)', fontSize:11 }}>Daily volume and sentiment over time</summary><div style={{ marginTop:8, display:'grid', gap:3 }}>{(metrics.dailyStats || []).map(day => { const split = social.analytics.sentimentOverTime?.[day.date] || {}; return <div key={day.date} style={{ display:'grid', gridTemplateColumns:'90px repeat(4, 1fr)', gap:8, fontSize:10, color:'var(--text-muted)' }}><span>{day.date}</span><span>Total {fmt(day.mentions)}</span><span>Positive {fmt(split.Positive || 0)}</span><span>Neutral {fmt(split.Neutral || 0)}</span><span>Negative {fmt(split.Negative || 0)}</span></div>; })}</div></details>
+        <div style={{ marginTop:12, color:'var(--text-muted)', fontSize:11 }}>Engagement total: <strong style={{ color:'var(--text-primary)' }}>{social.analytics.engagement == null ? 'Not available from this provider' : fmt(social.analytics.engagement)}</strong>{social.analytics.topicGroup ? ` · Topic group: ${social.analytics.topicGroup}` : ''}</div>
+      </div>}
 
       <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(320px, 1fr))', gap:12 }}>
         <div style={{ ...CARD, minHeight:270 }}>
@@ -1540,6 +1566,8 @@ export default function SignalIntel() {
   const [uploadError, setUploadError] = useState('');
   const [uploadStatus, setUploadStatus] = useState('');
   const [manualData, setManualData] = useState(null);
+  const [lumenUpload, setLumenUpload] = useState(null);
+  const [lumenUploadStatus, setLumenUploadStatus] = useState('');
   const [claudeBackupUsed, setClaudeBackupUsed] = useState(false);
   const [claudeRunLog, setClaudeRunLog] = useState([]);
 
@@ -1684,6 +1712,12 @@ export default function SignalIntel() {
     }
   };
 
+  const uploadLumenXls = async event => {
+    const file = event.target.files?.[0]; event.target.value = ''; if (!file) return; setLumenUploadStatus(`Reading ${file.name}...`);
+    try { const form = new FormData(); form.append('file', file); const response = await fetch('/api/lumen-upload', { method: 'POST', body: form }); const data = await response.json(); if (!response.ok || data.error) throw new Error(data.error || `Upload failed (${response.status})`); setLumenUpload(data); setLumenUploadStatus(`${data.diagnostics.uniqueUrls} unique top-post URLs loaded from ${data.diagnostics.sheetsRead.length} Lumen sheets.`); }
+    catch (error) { setLumenUpload(null); setLumenUploadStatus(`Lumen upload failed: ${error.message}`); }
+  };
+
   const confirmManualAndRun = () => {
     const required = ['totalMentions', 'totalReach', 'positiveMentions', 'negativeMentions'];
     const missing = required.filter(key => manualData?.[key] === '' || manualData?.[key] === null || manualData?.[key] === undefined);
@@ -1710,9 +1744,10 @@ export default function SignalIntel() {
       const { startDate, endDate } = parsePeriod(effectivePeriod);
 
       sa('listener', 'running');
-      const listenerData = confirmedManualData
+      const rawListenerData = confirmedManualData
         ? manualSnapshotToListenerData(confirmedManualData, brand)
         : await listenerAgent(brand, startDate, endDate);
+      const listenerData = confirmedManualData ? rawListenerData : mergeLumenTopPosts(rawListenerData, lumenUpload);
       so('listenerData', listenerData); sa('listener', 'done');
 
       sa('tracker', 'running');
@@ -2002,6 +2037,11 @@ Return a concise intelligence summary, recurring themes, specific public posts o
                 </div>
               )}
             </div>
+          </div>
+
+          <div style={{ ...CARD, marginBottom:12, borderColor:'var(--accent-info-border)' }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', gap:12 }}><div><div style={{ color:'var(--accent-info)', fontSize:10, letterSpacing:'0.15em', textTransform:'uppercase', fontFamily:"'JetBrains Mono',monospace", marginBottom:4 }}>Optional top-post source</div><p style={{ color:'var(--text-muted)', fontSize:12, lineHeight:1.55, margin:0 }}>Upload a Lumen overview .xls to merge Top Social, Positive, Negative and Trending posts with API results. URLs are deduplicated and author fields are ignored.</p></div><label style={{ background:'var(--accent-info)', borderRadius:6, padding:'8px 12px', color:'var(--text-on-accent)', cursor:'pointer', fontSize:11, fontWeight:800, whiteSpace:'nowrap' }}>Upload Lumen .xls<input type="file" accept=".xls,application/vnd.ms-excel" onChange={uploadLumenXls} style={{ display:'none' }}/></label></div>
+            {lumenUploadStatus && <p style={{ color:lumenUpload ? 'var(--accent-positive)' : 'var(--accent-highlight)', fontSize:11, margin:'9px 0 0' }}>{lumenUploadStatus}</p>}
           </div>
 
           <div style={{ background:'var(--bg-panel-warning)', border:'1px solid var(--accent-highlight-border)', borderRadius:8, padding:16 }}>

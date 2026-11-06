@@ -417,6 +417,8 @@ export async function getLiveSnapshot({ provider: requestedProvider, accountId, 
   const countPromise = provider.id === 'talkwalker' ? provider.fetchCount({
     projectId, dateFrom, dateTo, logger: console,
   }).then(count => ({ count })).catch(error => ({ error })) : null;
+  const analyticsPromise = provider.fetchAnalytics ? provider.fetchAnalytics({ projectId, dateFrom, dateTo, logger: console }).then(analytics => ({ analytics })).catch(error => ({ error })) : null;
+  const topPostsPromise = provider.fetchTopPosts ? provider.fetchTopPosts({ projectId, dateFrom, dateTo, logger: console }).then(topPosts => ({ topPosts })).catch(error => ({ error })) : null;
 
   try {
     console.info('[Tracking live snapshot] mentions stage start', { brand, projectId, projectName, dateFrom, dateTo });
@@ -504,7 +506,9 @@ export async function getLiveSnapshot({ provider: requestedProvider, accountId, 
     snapshot.sourceCategories = Object.entries(count.platforms || {}).filter(([, value]) => Number(value) > 0).sort((a, b) => b[1] - a[1]).map(([name, value], index) => ({ name, count: Number(value), pct: Number(((Number(value) / Math.max(aggregateTotal, 1)) * 100).toFixed(1)), color: SOURCE_COLORS[index % SOURCE_COLORS.length] }));
     snapshot.sourceNarrative = snapshot.sourceCategories[0] ? `${snapshot.sourceCategories[0].name} leads the all-platform source mix at ${snapshot.sourceCategories[0].pct}% of mentions. Export-restricted platforms are included in these totals.` : 'No all-platform source mix was available for this tracking period.';
     const usage = await provider.fetchCreditUsage().catch(() => null);
-    snapshot.diagnostics = { ...snapshot.diagnostics, aggregateMentions: aggregateTotal, readableMentions: snapshot.readableMentions, creditsUsed: (mentionsResult.creditsUsed || 0) + (reach.creditsUsed || 0) + (count.creditsUsed || 0), monthlyCreditsUsed: usage?.usedMonthly ?? null, monthlyCreditsRemaining: usage?.remainingMonthly ?? null };
+    const analyticsResult = await analyticsPromise; const topPostsResult = await topPostsPromise; const analytics = analyticsResult?.analytics || { unavailable: { analytics: analyticsResult?.error?.message || 'Not available from this provider.' }, creditsUsed: 0 }; const topPosts = topPostsResult?.topPosts || { overall: [], positive: [], negative: [], creditsUsed: 0, note: topPostsResult?.error?.message || 'Top posts not available from this provider.' };
+    snapshot.analytics = { ...analytics, sentimentOverTime: count.dailySentiment || {} }; snapshot.topPosts = topPosts; snapshot.topMentions = [...(topPosts.overall || []), ...(topPosts.positive || []), ...(topPosts.negative || [])].filter((item, index, all) => item.url && all.findIndex(candidate => candidate.url === item.url) === index).map(item => ({ source: item.platform, title: item.paraphrase, meta: [item.date, `${Number(item.engagement || 0).toLocaleString()} engagement`, item.source].filter(Boolean).join(' · '), sentiment: item.sentiment, text: item.paraphrase, url: item.url, engagement: item.engagement, date: item.date, platform: item.platform, origin: item.source }));
+    snapshot.diagnostics = { ...snapshot.diagnostics, aggregateMentions: aggregateTotal, readableMentions: snapshot.readableMentions, creditsUsed: (mentionsResult.creditsUsed || 0) + (reach.creditsUsed || 0) + (count.creditsUsed || 0) + (analytics.creditsUsed || 0) + (topPosts.creditsUsed || 0), monthlyCreditsUsed: usage?.usedMonthly ?? null, monthlyCreditsRemaining: usage?.remainingMonthly ?? null };
     console.info('[Tracking live snapshot] Talkwalker credit usage', { creditsUsed: snapshot.diagnostics.creditsUsed, monthlyCreditsUsed: snapshot.diagnostics.monthlyCreditsUsed, monthlyCreditsRemaining: snapshot.diagnostics.monthlyCreditsRemaining });
   }
   if (provider.id === 'brand24' && sourceFilter?.type === 'mcp' && sourceFilter.country) {
