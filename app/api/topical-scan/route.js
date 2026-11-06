@@ -3,7 +3,7 @@ import { getProvider, providerDescriptor } from '../../../lib/providers';
 import { claudeProviderMetadata, requestClaude } from '../../../lib/claude-api';
 import { requestOpenRouterChat } from '../../../lib/openrouter-api';
 import { extractOpenRouterAnnotationUrls, requestGrokSearch } from '../../../lib/grok-api';
-import { calendarMonthWindows, cleanList, extractJson, filterMentionsToManilaRange, flagMentions, sanitizeDirectionalFindings, summarizeClassifications, validateTopicalScanInput } from '../../../lib/topical-scan';
+import { TOPICAL_SENTIMENTS, TOPICAL_STANCES, calendarMonthWindows, cleanList, extractJson, filterMentionsToManilaRange, flagMentions, sanitizeDirectionalFindings, summarizeClassifications, validateTopicalScanInput } from '../../../lib/topical-scan';
 
 export const maxDuration = 300;
 const CLAUDE_MODEL = 'claude-sonnet-4-6';
@@ -23,9 +23,10 @@ async function claudeText(prompt, maxTokens = 4000) {
 }
 
 async function classify(flagged, themes, onProgress = () => {}) {
-  if (!flagged.length) return { results: [], backupUsed: false };
+  if (!flagged.length) return { results: [], backupUsed: false, evidenceOverrides: 0 };
   const results = [];
   let backupUsed = false;
+  let evidenceOverrides = 0;
   const totalBatches = Math.ceil(flagged.length / 35);
   for (let offset = 0; offset < flagged.length; offset += 35) {
     const batchNumber = Math.floor(offset / 35) + 1;
@@ -37,10 +38,16 @@ async function classify(flagged, themes, onProgress = () => {}) {
     onProgress({ stage: 'provider', message: claude.provider.claudeBackupUsed ? 'AI classification: Claude via backup provider' : 'AI classification: Claude', provider: claude.provider, internal: true });
     const parsed = extractJson(claude.text, []);
     if (!Array.isArray(parsed)) throw new Error('Classification returned invalid JSON. No metrics were produced.');
-    const batchIds = new Set(sourceBatch.map(item => item.id));
-    results.push(...parsed.map((item, index) => ({ ...item, id: batchIds.has(String(item?.id || '')) ? String(item.id) : sourceBatch[index]?.id || String(item?.id || '') })));
+    const parsedById = new Map(parsed.map(item => [String(item?.id || ''), item]));
+    results.push(...sourceBatch.map((source, index) => {
+      const item = parsedById.get(source.id) || parsed[index] || {};
+      const returnedThemes = (Array.isArray(item.themeIndexes) ? item.themeIndexes : []).map(Number).filter(themeIndex => source.candidateThemeIndexes.includes(themeIndex));
+      const modelAccepted = item.relevant !== false && returnedThemes.length > 0;
+      if (!modelAccepted) evidenceOverrides += 1;
+      return { ...item, id: source.id, relevant: true, themeIndexes: modelAccepted ? returnedThemes : source.candidateThemeIndexes, stance: TOPICAL_STANCES.includes(item.stance) ? item.stance : 'advice-giving', sentiment: TOPICAL_SENTIMENTS.includes(item.sentiment) ? item.sentiment : String(source.sourceSentiment || 'unknown').toLocaleLowerCase(), paraphrase: item.paraphrase || 'The monitored item discusses a phrase matched to this theme.' };
+    }));
   }
-  return { results, backupUsed };
+  return { results, backupUsed, evidenceOverrides };
 }
 
 function directionalPrompt(input, theme, sourceLine, limit = null) {
@@ -200,7 +207,7 @@ async function executeScan(input, onProgress = () => {}) {
       if (preflightCount > 500) { const error = new Error(`This pull is estimated at ${preflightCount + windows.length * 40} Talkwalker credits for ${preflightCount} readable results. Confirmation is required.`); error.status = 409; throw error; }
     }
     const mentions = []; const flagged = []; const classifications = []; const monthPulls = [];
-    let totalReach = 0; let backupUsed = false; let totalPages = 0; let rawRetrieved = 0; let duplicateMentions = 0; let mentionsWithoutId = 0; let apiCount = 0; let readableCount = 0; let noiseExcluded = 0; let creditsUsed = 0; const aggregateDaily = {}; const aggregatePlatforms = {};
+    let totalReach = 0; let backupUsed = false; let evidenceOverrides = 0; let totalPages = 0; let rawRetrieved = 0; let duplicateMentions = 0; let mentionsWithoutId = 0; let apiCount = 0; let readableCount = 0; let noiseExcluded = 0; let creditsUsed = 0; const aggregateDaily = {}; const aggregatePlatforms = {};
     for (let monthIndex = 0; monthIndex < windows.length; monthIndex += 1) {
       const window = windows[monthIndex]; const label = `${window.month} (${monthIndex + 1}/${windows.length})`;
       onProgress({ stage: 'mentions', message: `${label} · pulling monitored mentions in Asia/Manila window ${window.dateFrom} 00:00–${window.dateTo} 23:59` });
@@ -218,7 +225,7 @@ async function executeScan(input, onProgress = () => {}) {
       onProgress({ stage: 'filtering', message: `${label} · ${monthFlagged.length} mentions flagged for classification` });
       const monthClassification = await classify(monthFlagged, input.themes, progress => onProgress({ ...progress, message: `${label} · ${progress.message}` }));
       mentions.push(...inRange); flagged.push(...monthFlagged); classifications.push(...monthClassification.results);
-      backupUsed ||= monthClassification.backupUsed; totalReach += reach.totalReach; apiCount += count.total; readableCount += count.readableTotal ?? mentionPull.rawMentions; totalPages += mentionPull.pages; rawRetrieved += mentionPull.rawMentions; duplicateMentions += mentionPull.duplicateMentions; mentionsWithoutId += mentionPull.mentionsWithoutId; noiseExcluded += mentionPull.noiseExcluded || 0; creditsUsed += (mentionPull.creditsUsed || 0) + (reach.creditsUsed || 0) + (count.creditsUsed || 0);
+      backupUsed ||= monthClassification.backupUsed; evidenceOverrides += monthClassification.evidenceOverrides || 0; totalReach += reach.totalReach; apiCount += count.total; readableCount += count.readableTotal ?? mentionPull.rawMentions; totalPages += mentionPull.pages; rawRetrieved += mentionPull.rawMentions; duplicateMentions += mentionPull.duplicateMentions; mentionsWithoutId += mentionPull.mentionsWithoutId; noiseExcluded += mentionPull.noiseExcluded || 0; creditsUsed += (mentionPull.creditsUsed || 0) + (reach.creditsUsed || 0) + (count.creditsUsed || 0);
       Object.entries(count.daily || {}).forEach(([date, value]) => { aggregateDaily[date] = (aggregateDaily[date] || 0) + Number(value || 0); }); Object.entries(count.platforms || {}).forEach(([platform, value]) => { aggregatePlatforms[platform] = (aggregatePlatforms[platform] || 0) + Number(value || 0); });
       monthPulls.push({ ...window, pages: mentionPull.pages, rawRetrieved: mentionPull.rawMentions, readableTotal: count.readableTotal, allPlatformTotal: count.total, uniqueRetrieved: mentionPull.mentions.length, inRange: inRange.length, duplicatesRemoved: mentionPull.duplicateMentions, noiseExcluded: mentionPull.noiseExcluded || 0, undatedExcluded, mentionsWithoutId: mentionPull.mentionsWithoutId, removedOutsideRange, minReturnedDate: mentionPull.minDate, maxReturnedDate: mentionPull.maxDate, apiCount: count.total });
     }
@@ -249,7 +256,7 @@ async function executeScan(input, onProgress = () => {}) {
       generatedAt: new Date().toISOString(), projectId: String(input.projectId), projectName: input.projectName || '', dateFrom: input.dateFrom, dateTo: input.dateTo, provider: providerDescriptor(provider.id),
       timezone: 'Asia/Manila',
       pull: { pages: totalPages, rawRetrieved, readableCount, retrieved: mentions.length, duplicateMentions, noiseExcluded, undatedExcluded: monthPulls.reduce((sum, month) => sum + month.undatedExcluded, 0), mentionsWithoutId, apiCount, expectedTotal, countMatchesExpected, differencePct, countWarning, months: monthPulls, projectIdConfirmed: String(input.projectId), coverageDateFrom: mentionDates[0] || null, coverageDateTo: mentionDates.at(-1) || null },
-      internalRunAudit: { creditsUsed, monthlyCreditsUsed: creditUsage?.usedMonthly ?? null, monthlyCreditsRemaining: creditUsage?.remainingMonthly ?? null },
+      internalRunAudit: { creditsUsed, monthlyCreditsUsed: creditUsage?.usedMonthly ?? null, monthlyCreditsRemaining: creditUsage?.remainingMonthly ?? null, pass1EvidenceOverrides: evidenceOverrides },
       claudeProvider: backupUsed ? 'Claude via OpenRouter (backup)' : 'Claude direct',
       claudeBackupUsed: backupUsed,
       verified, directional,
