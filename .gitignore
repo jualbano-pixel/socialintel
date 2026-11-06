@@ -3,3 +3,10 @@
 node_modules/
 .next/
 .DS_Store
+.vercel
+output/
+tmp/
+public/eastwest-reference/
+docs/eastwest-*
+lib/pdf-templates/eastwest-reference/
+scripts/*eastwest*
